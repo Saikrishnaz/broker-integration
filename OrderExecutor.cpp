@@ -65,8 +65,16 @@
 // Forward declarations are already in OrderExecutor.h
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
+
+#ifdef _WIN32
+#include <direct.h> // _mkdir
+#else
+#include <sys/stat.h> // mkdir
+#endif
 
 // ═════════════════════════════════════════════════════════════════════
 //  String helpers
@@ -861,48 +869,817 @@ OrderResult OrderExecutor::placeOrderUpstox(UpstoxBroker *b,
 }
 
 // ═════════════════════════════════════════════════════════════════════
-//  Example main() — shows how to use OrderExecutor
+//  InstrumentNormalizer — URL constants (matching Python reference)
 // ═════════════════════════════════════════════════════════════════════
 
+const std::map<std::string, std::string> InstrumentNormalizer::ALICE_URLS = {
+    {"NSE",
+     "https://v2api.aliceblueonline.com/restpy/static/contract_master/NSE.csv"},
+    {"BSE",
+     "https://v2api.aliceblueonline.com/restpy/static/contract_master/BSE.csv"},
+    {"NFO",
+     "https://v2api.aliceblueonline.com/restpy/static/contract_master/NFO.csv"},
+    {"BFO",
+     "https://v2api.aliceblueonline.com/restpy/static/contract_master/BFO.csv"},
+    {"MCX",
+     "https://v2api.aliceblueonline.com/restpy/static/contract_master/MCX.csv"},
+};
+
+const std::map<std::string, std::string> InstrumentNormalizer::FYERS_URLS = {
+    {"NSE", "https://public.fyers.in/sym_details/NSE_CM.csv"},
+    {"BSE", "https://public.fyers.in/sym_details/BSE_CM.csv"},
+    {"NFO", "https://public.fyers.in/sym_details/NSE_FO.csv"},
+    {"BFO", "https://public.fyers.in/sym_details/BSE_FO.csv"},
+    {"MCX", "https://public.fyers.in/sym_details/MCX_COM.csv"},
+};
+
+const std::string InstrumentNormalizer::ANGEL_URL =
+    "https://margincalculator.angelbroking.com/OpenAPI_File/files/"
+    "OpenAPIScripMaster.json";
+
+const std::string InstrumentNormalizer::ZERODHA_URL =
+    "https://api.kite.trade/instruments";
+
+const std::string InstrumentNormalizer::UPSTOX_URL =
+    "https://assets.upstox.com/market-quote/instruments/exchange/"
+    "complete.csv.gz";
+
+const std::map<std::string, std::string>
+    InstrumentNormalizer::UPSTOX_EXCHANGE_MAP = {
+        {"NFO", "NSE_FO"}, {"BFO", "BSE_FO"}, {"MCX", "MCX_FO"},
+        {"BSE", "BSE_EQ"}, {"NSE", "NSE_EQ"},
+};
+
+// ═════════════════════════════════════════════════════════════════════
+//  InstrumentNormalizer — Helper utilities
+// ═════════════════════════════════════════════════════════════════════
+
+// libcurl write callback for downloading
+static size_t NormalizerWriteCB(void *contents, size_t size, size_t nmemb,
+                                void *userp) {
+  ((std::string *)userp)->append((char *)contents, size * nmemb);
+  return size * nmemb;
+}
+
+std::string InstrumentNormalizer::downloadUrl(const std::string &url) {
+  std::string response;
+  CURL *curl = curl_easy_init();
+  if (!curl)
+    throw std::runtime_error("Failed to init curl");
+
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NormalizerWriteCB);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+  // For gzipped content (Upstox)
+  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+
+  CURLcode res = curl_easy_perform(curl);
+  curl_easy_cleanup(curl);
+
+  if (res != CURLE_OK)
+    throw std::runtime_error("Download failed: " +
+                             std::string(curl_easy_strerror(res)));
+
+  return response;
+}
+
+std::vector<std::vector<std::string>>
+InstrumentNormalizer::parseCSV(const std::string &data) {
+  std::vector<std::vector<std::string>> rows;
+  std::istringstream stream(data);
+  std::string line;
+
+  while (std::getline(stream, line)) {
+    // Strip \r
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    if (line.empty())
+      continue;
+
+    std::vector<std::string> row;
+    std::string field;
+    bool inQuotes = false;
+
+    for (size_t i = 0; i < line.size(); ++i) {
+      char c = line[i];
+      if (c == '"') {
+        inQuotes = !inQuotes;
+      } else if (c == ',' && !inQuotes) {
+        row.push_back(field);
+        field.clear();
+      } else {
+        field += c;
+      }
+    }
+    row.push_back(field);
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+int InstrumentNormalizer::findColumn(const std::vector<std::string> &header,
+                                     const std::string &name) {
+  for (int i = 0; i < (int)header.size(); ++i) {
+    // Trim whitespace for comparison
+    std::string h = header[i];
+    while (!h.empty() && (h.front() == ' ' || h.front() == '\t'))
+      h.erase(h.begin());
+    while (!h.empty() && (h.back() == ' ' || h.back() == '\t'))
+      h.pop_back();
+    if (h == name)
+      return i;
+  }
+  return -1;
+}
+
+bool InstrumentNormalizer::fileExists(const std::string &path) {
+  std::ifstream f(path);
+  return f.good();
+}
+
+void InstrumentNormalizer::writeFile(const std::string &path,
+                                     const std::string &data) {
+  std::ofstream f(path, std::ios::binary);
+  f.write(data.c_str(), data.size());
+}
+
+std::string InstrumentNormalizer::readFile(const std::string &path) {
+  std::ifstream f(path, std::ios::binary);
+  return std::string((std::istreambuf_iterator<char>(f)),
+                     std::istreambuf_iterator<char>());
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  InstrumentNormalizer — Master loaders
+// ═════════════════════════════════════════════════════════════════════
+
+void InstrumentNormalizer::loadAliceMaster(const std::string &dir, bool force) {
+  for (auto &[exchange, url] : ALICE_URLS) {
+    std::string cachePath = dir + "/alice_" + exchange + ".csv";
+    std::string csvData;
+
+    if (force || !fileExists(cachePath)) {
+      std::cout << "[InstrumentNormalizer] Downloading Alice " << exchange
+                << " master..." << std::endl;
+      csvData = downloadUrl(url);
+      writeFile(cachePath, csvData);
+    } else {
+      std::cout << "[InstrumentNormalizer] Loading Alice " << exchange
+                << " from cache..." << std::endl;
+      csvData = readFile(cachePath);
+    }
+
+    auto rows = parseCSV(csvData);
+    if (rows.size() < 2)
+      continue;
+
+    auto &header = rows[0];
+    int iToken = findColumn(header, "Token");
+    int iTradSym = findColumn(header, "Trading Symbol");
+    int iSymbol = findColumn(header, "Symbol");
+    int iLotSize = findColumn(header, "Lot Size");
+    int iTickSize = findColumn(header, "Tick Size");
+
+    if (iToken < 0 || iTradSym < 0) {
+      std::cerr << "[InstrumentNormalizer] Alice " << exchange
+                << ": missing Token/Trading Symbol columns" << std::endl;
+      continue;
+    }
+
+    auto &exchMap = masters_["alice"][exchange];
+    for (size_t r = 1; r < rows.size(); ++r) {
+      auto &row = rows[r];
+      if (row.size() <= (size_t)std::max({iToken, iTradSym, iSymbol, iLotSize}))
+        continue;
+
+      InstrumentInfo info;
+      try {
+        info.token = std::stoi(row[iToken]);
+      } catch (...) {
+        continue;
+      }
+
+      info.trading_symbol = row[iTradSym];
+      if (iSymbol >= 0 && (size_t)iSymbol < row.size())
+        info.symbol = row[iSymbol];
+      if (iLotSize >= 0 && (size_t)iLotSize < row.size()) {
+        try {
+          info.lot_size = std::stoi(row[iLotSize]);
+        } catch (...) {
+        }
+      }
+      if (iTickSize >= 0 && (size_t)iTickSize < row.size()) {
+        try {
+          info.tick_size = std::stod(row[iTickSize]);
+        } catch (...) {
+        }
+      }
+
+      exchMap[info.token] = std::move(info);
+    }
+    std::cout << "[InstrumentNormalizer] Alice " << exchange << ": "
+              << exchMap.size() << " instruments loaded" << std::endl;
+  }
+}
+
+void InstrumentNormalizer::loadAngelMaster(const std::string &dir, bool force) {
+  std::string cachePath = dir + "/angel.json";
+  std::string jsonData;
+
+  if (force || !fileExists(cachePath)) {
+    std::cout << "[InstrumentNormalizer] Downloading Angel master..."
+              << std::endl;
+    jsonData = downloadUrl(ANGEL_URL);
+    writeFile(cachePath, jsonData);
+  } else {
+    std::cout << "[InstrumentNormalizer] Loading Angel from cache..."
+              << std::endl;
+    jsonData = readFile(cachePath);
+  }
+
+  try {
+    json instruments = json::parse(jsonData);
+    for (auto &item : instruments) {
+      std::string exchSeg = item.value("exch_seg", "");
+      if (exchSeg != "NSE" && exchSeg != "BSE" && exchSeg != "NFO" &&
+          exchSeg != "BFO" && exchSeg != "MCX")
+        continue;
+
+      InstrumentInfo info;
+      try {
+        std::string tokenStr = item.value("token", "0");
+        info.token = std::stoi(tokenStr);
+      } catch (...) {
+        continue;
+      }
+
+      info.trading_symbol = item.value("symbol", "");
+      info.symbol = item.value("name", "");
+      try {
+        std::string lotStr = item.value("lotsize", "1");
+        info.lot_size = std::stoi(lotStr);
+      } catch (...) {
+      }
+
+      masters_["angel"][exchSeg][info.token] = std::move(info);
+    }
+
+    for (auto &[exch, m] : masters_["angel"]) {
+      std::cout << "[InstrumentNormalizer] Angel " << exch << ": " << m.size()
+                << " instruments loaded" << std::endl;
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "[InstrumentNormalizer] Angel parse error: " << e.what()
+              << std::endl;
+  }
+}
+
+void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
+                                             bool force) {
+  std::string cachePath = dir + "/zerodha.csv";
+  std::string csvData;
+
+  if (force || !fileExists(cachePath)) {
+    std::cout << "[InstrumentNormalizer] Downloading Zerodha master..."
+              << std::endl;
+    csvData = downloadUrl(ZERODHA_URL);
+    writeFile(cachePath, csvData);
+  } else {
+    std::cout << "[InstrumentNormalizer] Loading Zerodha from cache..."
+              << std::endl;
+    csvData = readFile(cachePath);
+  }
+
+  auto rows = parseCSV(csvData);
+  if (rows.size() < 2)
+    return;
+
+  auto &header = rows[0];
+  int iExchToken = findColumn(header, "exchange_token");
+  int iInstToken = findColumn(header, "instrument_token");
+  int iTradSym = findColumn(header, "tradingsymbol");
+  int iExchange = findColumn(header, "exchange");
+  int iLotSize = findColumn(header, "lot_size");
+  int iTickSize = findColumn(header, "tick_size");
+  int iName = findColumn(header, "name");
+  int iSegment = findColumn(header, "segment");
+
+  if (iExchToken < 0 || iTradSym < 0 || iExchange < 0)
+    return;
+
+  for (size_t r = 1; r < rows.size(); ++r) {
+    auto &row = rows[r];
+    if (row.size() <= (size_t)std::max({iExchToken, iTradSym, iExchange}))
+      continue;
+
+    // Filter to relevant segments
+    if (iSegment >= 0 && (size_t)iSegment < row.size()) {
+      std::string seg = row[iSegment];
+      if (seg.find("NFO") == std::string::npos &&
+          seg.find("BFO") == std::string::npos &&
+          seg.find("MCX") == std::string::npos && seg != "NSE" && seg != "BSE")
+        continue;
+    }
+
+    InstrumentInfo info;
+    try {
+      info.token = std::stoi(row[iExchToken]);
+    } catch (...) {
+      continue;
+    }
+    info.trading_symbol = row[iTradSym];
+
+    if (iInstToken >= 0 && (size_t)iInstToken < row.size()) {
+      try {
+        info.instrument_token = std::stoi(row[iInstToken]);
+      } catch (...) {
+      }
+    }
+    if (iLotSize >= 0 && (size_t)iLotSize < row.size()) {
+      try {
+        info.lot_size = std::stoi(row[iLotSize]);
+      } catch (...) {
+      }
+    }
+    if (iTickSize >= 0 && (size_t)iTickSize < row.size()) {
+      try {
+        info.tick_size = std::stod(row[iTickSize]);
+      } catch (...) {
+      }
+    }
+    if (iName >= 0 && (size_t)iName < row.size())
+      info.symbol = row[iName];
+
+    std::string exch = row[iExchange];
+    masters_["zerodha"][exch][info.token] = std::move(info);
+  }
+
+  for (auto &[exch, m] : masters_["zerodha"]) {
+    std::cout << "[InstrumentNormalizer] Zerodha " << exch << ": " << m.size()
+              << " instruments loaded" << std::endl;
+  }
+}
+
+void InstrumentNormalizer::loadUpstoxMaster(const std::string &dir,
+                                            bool force) {
+  std::string cachePath = dir + "/upstox.csv";
+  std::string csvData;
+
+  if (force || !fileExists(cachePath)) {
+    std::cout << "[InstrumentNormalizer] Downloading Upstox master..."
+              << std::endl;
+    csvData = downloadUrl(UPSTOX_URL);
+    writeFile(cachePath, csvData);
+  } else {
+    std::cout << "[InstrumentNormalizer] Loading Upstox from cache..."
+              << std::endl;
+    csvData = readFile(cachePath);
+  }
+
+  auto rows = parseCSV(csvData);
+  if (rows.size() < 2)
+    return;
+
+  auto &header = rows[0];
+  int iExchToken = findColumn(header, "exchange_token");
+  int iInstKey = findColumn(header, "instrument_key");
+  int iTradSym = findColumn(header, "tradingsymbol");
+  int iExchange = findColumn(header, "exchange");
+  int iLotSize = findColumn(header, "lot_size");
+  int iTickSize = findColumn(header, "tick_size");
+  int iName = findColumn(header, "name");
+
+  if (iExchToken < 0 || iExchange < 0)
+    return;
+
+  for (size_t r = 1; r < rows.size(); ++r) {
+    auto &row = rows[r];
+    if (row.size() <= (size_t)std::max(iExchToken, iExchange))
+      continue;
+
+    InstrumentInfo info;
+    try {
+      info.token = std::stoi(row[iExchToken]);
+    } catch (...) {
+      continue;
+    }
+
+    if (iTradSym >= 0 && (size_t)iTradSym < row.size())
+      info.trading_symbol = row[iTradSym];
+    if (iInstKey >= 0 && (size_t)iInstKey < row.size())
+      info.instrument_key = row[iInstKey];
+    if (iLotSize >= 0 && (size_t)iLotSize < row.size()) {
+      try {
+        info.lot_size = std::stoi(row[iLotSize]);
+      } catch (...) {
+      }
+    }
+    if (iTickSize >= 0 && (size_t)iTickSize < row.size()) {
+      try {
+        info.tick_size = std::stod(row[iTickSize]);
+      } catch (...) {
+      }
+    }
+    if (iName >= 0 && (size_t)iName < row.size())
+      info.symbol = row[iName];
+
+    // Upstox uses exchange names like NSE_FO, BSE_EQ, etc.
+    std::string exch = row[iExchange];
+    masters_["upstox"][exch][info.token] = std::move(info);
+  }
+
+  for (auto &[exch, m] : masters_["upstox"]) {
+    std::cout << "[InstrumentNormalizer] Upstox " << exch << ": " << m.size()
+              << " instruments loaded" << std::endl;
+  }
+}
+
+void InstrumentNormalizer::loadFyersMaster(const std::string &dir, bool force) {
+  // Fyers CSVs have no header row — column names from Python reference:
+  // Fytoken,SymbolDetails,ExchangeInstrumentType,MinimumLotSize,TickSize,
+  // ISIN,TradingSession,LastUpdateDate,Expirydate,SymbolTicker,Exchange,
+  // Segment,ScripCode,UnderlyingSymbol,...
+  const int COL_FYTOKEN = 0;
+  const int COL_LOTSZ = 3;
+  const int COL_TICKSZ = 4;
+  const int COL_SYMTICKER = 9;
+  const int COL_SCRIPCODE = 12;
+  const int COL_UNDERLYING = 13;
+
+  for (auto &[exchange, url] : FYERS_URLS) {
+    std::string cachePath = dir + "/fyers_" + exchange + ".csv";
+    std::string csvData;
+
+    if (force || !fileExists(cachePath)) {
+      std::cout << "[InstrumentNormalizer] Downloading Fyers " << exchange
+                << " master..." << std::endl;
+      csvData = downloadUrl(url);
+      writeFile(cachePath, csvData);
+    } else {
+      std::cout << "[InstrumentNormalizer] Loading Fyers " << exchange
+                << " from cache..." << std::endl;
+      csvData = readFile(cachePath);
+    }
+
+    auto rows = parseCSV(csvData);
+    auto &exchMap = masters_["fyers"][exchange];
+
+    for (auto &row : rows) {
+      if (row.size() <= (size_t)COL_UNDERLYING)
+        continue;
+
+      InstrumentInfo info;
+      try {
+        info.token = std::stoi(row[COL_SCRIPCODE]);
+      } catch (...) {
+        continue;
+      }
+
+      info.fytoken = row[COL_FYTOKEN];
+      info.symbol_ticker = row[COL_SYMTICKER];
+      info.symbol = row[COL_UNDERLYING];
+      try {
+        info.lot_size = std::stoi(row[COL_LOTSZ]);
+      } catch (...) {
+      }
+      try {
+        info.tick_size = std::stod(row[COL_TICKSZ]);
+      } catch (...) {
+      }
+
+      exchMap[info.token] = std::move(info);
+    }
+    std::cout << "[InstrumentNormalizer] Fyers " << exchange << ": "
+              << exchMap.size() << " instruments loaded" << std::endl;
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  InstrumentNormalizer — Public API
+// ═════════════════════════════════════════════════════════════════════
+
+void InstrumentNormalizer::loadMasters(const std::string &mastersDir,
+                                       const std::vector<std::string> &brokers,
+                                       bool forceDownload) {
+
+  // Create directory if it doesn't exist (best-effort)
+#ifdef _WIN32
+  _mkdir(mastersDir.c_str());
+#else
+  mkdir(mastersDir.c_str(), 0755);
+#endif
+
+  for (auto &broker : brokers) {
+    try {
+      if (broker == "alice")
+        loadAliceMaster(mastersDir, forceDownload);
+      else if (broker == "angel")
+        loadAngelMaster(mastersDir, forceDownload);
+      else if (broker == "zerodha")
+        loadZerodhaMaster(mastersDir, forceDownload);
+      else if (broker == "upstox")
+        loadUpstoxMaster(mastersDir, forceDownload);
+      else if (broker == "fyers")
+        loadFyersMaster(mastersDir, forceDownload);
+      else
+        std::cerr << "[InstrumentNormalizer] Unknown broker: " << broker
+                  << std::endl;
+    } catch (const std::exception &e) {
+      std::cerr << "[InstrumentNormalizer] Failed to load " << broker << ": "
+                << e.what() << std::endl;
+    }
+  }
+}
+
+const InstrumentInfo *InstrumentNormalizer::getInstrument(
+    const std::string &broker, const std::string &exchange, int token) const {
+  auto bIt = masters_.find(broker);
+  if (bIt == masters_.end())
+    return nullptr;
+
+  // For upstox, try mapped exchange name (NFO→NSE_FO, etc.)
+  std::string lookupExch = exchange;
+  if (broker == "upstox") {
+    auto mapIt = UPSTOX_EXCHANGE_MAP.find(exchange);
+    if (mapIt != UPSTOX_EXCHANGE_MAP.end())
+      lookupExch = mapIt->second;
+  }
+
+  auto eIt = bIt->second.find(lookupExch);
+  if (eIt == bIt->second.end())
+    return nullptr;
+
+  auto tIt = eIt->second.find(token);
+  if (tIt == eIt->second.end())
+    return nullptr;
+
+  return &tIt->second;
+}
+
+bool InstrumentNormalizer::isLoaded(const std::string &broker) const {
+  return masters_.find(broker) != masters_.end() &&
+         !masters_.at(broker).empty();
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  OrderExecutor — loadMasters delegate
+// ═════════════════════════════════════════════════════════════════════
+
+void OrderExecutor::loadMasters(const std::string &mastersDir,
+                                bool forceDownload) {
+  normalizer_.loadMasters(mastersDir,
+                          {"alice", "angel", "zerodha", "upstox", "fyers"},
+                          forceDownload);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  OrderExecutor — Simplified placeOrder
+//  Resolves instrument data from masters, multiplies qty by lot_size
+//  for F&O, fills UniversalOrder, then dispatches to the full version.
+// ═════════════════════════════════════════════════════════════════════
+
+OrderResult OrderExecutor::placeOrder(
+    const std::string &userId, const std::string &exchange, int exchange_token,
+    const std::string &transaction_type, int quantity,
+    const std::string &product, const std::string &order_type,
+    const std::string &position_type, double price, const std::string &tag) {
+  OrderResult result;
+  result.user_id = userId;
+
+  // 1. Look up the broker for this user
+  auto it = registry_.find(userId);
+  if (it == registry_.end()) {
+    result.message = "User [" + userId + "] is not registered.";
+    std::cerr << "[OrderExecutor] " << result.message << std::endl;
+    return result;
+  }
+
+  const BrokerInfo &info = it->second;
+  result.broker = info.broker_name;
+
+  // 2. Resolve instrument data from Alice master (primary reference)
+  const InstrumentInfo *aliceInst =
+      normalizer_.getInstrument("alice", exchange, exchange_token);
+
+  // Also try to get broker-specific instrument data
+  std::string brokerLookup = info.broker_name;
+  if (brokerLookup == "aliceblue")
+    brokerLookup = "alice";
+  else if (brokerLookup == "angelone")
+    brokerLookup = "angel";
+  else if (brokerLookup == "kiteconnect")
+    brokerLookup = "zerodha";
+
+  const InstrumentInfo *brokerInst =
+      normalizer_.getInstrument(brokerLookup, exchange, exchange_token);
+
+  // 3. Determine lot_size and trading_symbol
+  int lotSize = 1;
+  std::string tradingSymbol = "";
+  std::string symbolToken = std::to_string(exchange_token);
+
+  if (aliceInst) {
+    lotSize = aliceInst->lot_size;
+    tradingSymbol = aliceInst->trading_symbol;
+  }
+
+  // Override with broker-specific data if available
+  if (brokerInst) {
+    tradingSymbol = brokerInst->trading_symbol;
+    if (brokerInst->lot_size > 0)
+      lotSize = brokerInst->lot_size;
+  }
+
+  // 4. Calculate final quantity (multiply by lot_size for F&O)
+  int finalQty = quantity;
+  if (isDerivExchange(exchange) && lotSize > 1) {
+    finalQty = quantity * lotSize;
+  }
+
+  // 5. For Upstox, use instrument_key instead of token
+  if (info.broker_name == "upstox" && brokerInst &&
+      !brokerInst->instrument_key.empty()) {
+    symbolToken = brokerInst->instrument_key;
+  }
+
+  // 6. For Fyers, use SymbolTicker (e.g., "NSE:SBIN-EQ")
+  if (info.broker_name == "fyers" && brokerInst &&
+      !brokerInst->symbol_ticker.empty()) {
+    tradingSymbol = brokerInst->symbol_ticker;
+  }
+
+  // 7. Build UniversalOrder and dispatch
+  UniversalOrder order;
+  order.exchange = toUpper(exchange);
+  order.symbol_token = symbolToken;
+  order.trading_symbol = tradingSymbol;
+  order.transaction_type = toUpper(transaction_type);
+  order.quantity = finalQty;
+  order.product = toUpper(product);
+  order.order_type = toUpper(order_type);
+  order.position_type = toUpper(position_type);
+  order.price = price;
+  order.tag = tag;
+
+  std::cout << "[OrderExecutor] Simplified placeOrder: "
+            << "user=" << userId << " broker=" << info.broker_name
+            << " exch=" << order.exchange << " token=" << exchange_token
+            << " symbol=" << tradingSymbol << " side=" << order.transaction_type
+            << " qty=" << order.quantity << " (lots=" << quantity
+            << " x lotSize=" << lotSize << ")"
+            << " product=" << order.product << " orderType=" << order.order_type
+            << " posType=" << order.position_type << std::endl;
+
+  return placeOrder(userId, order);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  OrderExecutor — Thread Pool Parallel Order Placement
+//  Dispatches orders for multiple users concurrently using std::async.
+//  Batches by max_workers_ to avoid spawning too many threads.
+// ═════════════════════════════════════════════════════════════════════
+
+std::vector<OrderResult> OrderExecutor::placeOrderParallel(
+    const std::vector<UserOrder> &users, const std::string &exchange,
+    int exchange_token, const std::string &transaction_type,
+    int default_quantity, const std::string &product,
+    const std::string &order_type, const std::string &position_type,
+    double price, const std::string &tag) {
+
+  std::vector<OrderResult> results(users.size());
+
+  std::cout << "[OrderExecutor] placeOrderParallel: " << users.size()
+            << " users, exchange=" << exchange << " token=" << exchange_token
+            << " side=" << transaction_type << " product=" << product
+            << " maxWorkers=" << max_workers_ << std::endl;
+
+  auto startTime = std::chrono::steady_clock::now();
+
+  // Process in batches of max_workers_
+  for (size_t batchStart = 0; batchStart < users.size();
+       batchStart += max_workers_) {
+
+    size_t batchEnd = std::min(batchStart + (size_t)max_workers_, users.size());
+    std::vector<std::future<OrderResult>> futures;
+
+    // Launch async tasks for this batch
+    for (size_t i = batchStart; i < batchEnd; ++i) {
+      const auto &user = users[i];
+      int qty = (user.quantity > 0) ? user.quantity : default_quantity;
+
+      futures.push_back(std::async(
+          std::launch::async,
+          [this, &exchange, exchange_token, &transaction_type, qty, &product,
+           &order_type, &position_type, price, &tag,
+           userId = user.user_id]() -> OrderResult {
+            try {
+              return this->placeOrder(userId, exchange, exchange_token,
+                                      transaction_type, qty, product,
+                                      order_type, position_type, price, tag);
+            } catch (const std::exception &ex) {
+              OrderResult err;
+              err.user_id = userId;
+              err.success = false;
+              err.message = std::string("Exception: ") + ex.what();
+              return err;
+            }
+          }));
+    }
+
+    // Collect results from this batch
+    for (size_t i = 0; i < futures.size(); ++i) {
+      results[batchStart + i] = futures[i].get();
+    }
+  }
+
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - startTime)
+                     .count();
+
+  // Summary
+  int successCount = 0, failCount = 0;
+  for (auto &r : results) {
+    if (r.success)
+      ++successCount;
+    else
+      ++failCount;
+  }
+
+  std::cout << "[OrderExecutor] placeOrderParallel complete: " << successCount
+            << " success, " << failCount << " failed, " << elapsed << "ms total"
+            << std::endl;
+
+  return results;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  Example main() — shows how to use OrderExecutor
+// ═════════════════════════════════════════════════════════════════════
 
 int main() {
   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  // 1. Create broker instances (each with their own credentials)
+  // ... create other broker instances as needed
+
   AngelOneBroker angel("FZLDMjMp", "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkoyNTI1MDUiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pFekxDSnpiM1Z5WTJVaU9pSXpJaXdpWkdWMmFXTmxYMmxrSWpvaVkyRTRaakJoTkdJdFl6QmtPQzB6T0RZNUxUZzRNVFl0T0RBNU1EQTJaRFZpTnpZMklpd2lhMmxrSWpvaWRISmhaR1ZmYTJWNVgzWXlJaXdpYjIxdVpXMWhibUZuWlhKcFpDSTZNVE1zSW5CeWIyUjFZM1J6SWpwN0ltUmxiV0YwSWpwN0luTjBZWFIxY3lJNkltRmpkR2wyWlNKOUxDSnRaaUk2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlgwc0ltbHpjeUk2SW5SeVlXUmxYMnh2WjJsdVgzTmxjblpwWTJVaUxDSnpkV0lpT2lKS01qVXlOVEExSWl3aVpYaHdJam94TnpjeU5ETTJNakUzTENKdVltWWlPakUzTnpJek5EazJNemNzSW1saGRDSTZNVGMzTWpNME9UWXpOeXdpYW5ScElqb2lNbUpsTVRsbFpqWXROVEkxT1MwME5UQXpMVGxoTVRFdFkyWmhPREEzTXpRelpEY3hJaXdpVkc5clpXNGlPaUlpZlEuZGtqQWZlOHVCRXhOeDRNN2FDNTg0X1FSV1h3SkhnQWwwNzhXNTlLa1FVTldDdm0zdy0xMHdOZW1IMEtpRjFHeklES3hPX0hTa1lCN3U5QkQ4UmZORFZleWZSWHRYQnBnNkpJRWx0NExFbHFXX3JFQ1ZjSVI0NnNJSGhqM3pPVUM0aGZWRVdjN3hkakVmVW53bVZiUEdOUnlsMkkzeDJ4VjRJVnlmaVVyVkRBIiwiQVBJLUtFWSI6IkZaTERNak1wIiwiWC1PTEQtQVBJLUtFWSI6dHJ1ZSwiaWF0IjoxNzcyMzQ5ODE3LCJleHAiOjE3NzIzODk4MDB9.8_NaN5qtNu5Iui24k2EqCeU9UjjpLmynPPrHe2YwAYkp9nAktIG-2F6ZipaNbiv62fdQhuBD9rqLyeQpWbXpsg", "J252505");
   AliceBlueBroker alice("eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyam9lOFVScGxZU3FTcDB3RDNVemVBQkgxYkpmOE4wSDRDMGVVSWhXUVAwIn0.eyJleHAiOjE3Nzc1NDEzOTgsImlhdCI6MTc3MjM1NzQ4MywianRpIjoib25ydHJ0OjZlMjJmNDMzLWJkOWEtODgwMC0yYjgxLTc5MTJjMDE4MWJmNCIsImlzcyI6Imh0dHBzOi8vaWRhYXMuYWxpY2VibHVlb25saW5lLmNvbS9pZGFhcy9yZWFsbXMvQWxpY2VCbHVlIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6IjVlZjY2YmZiLTRjNWQtNDM5OS1iNmM2LTdjODViNjE0NjU2ZiIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFsaWNlLWtiIiwic2lkIjoiN2JjNjQ2MzQtMDRhNS1lYjFmLTc3MzItNjlhOWQ3NzM3M2MxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMiIsImh0dHA6Ly9sb2NhbGhvc3Q6NTA1MCIsImh0dHA6Ly9sb2NhbGhvc3Q6OTk0MyIsImh0dHA6Ly9sb2NhbGhvc3Q6OTAwMCJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLWFsaWNlYmx1ZWtiIiwidW1hX2F1dGhvcml6YXRpb24iXX0sInJlc291cmNlX2FjY2VzcyI6eyJhbGljZS1rYiI6eyJyb2xlcyI6WyJHVUVTVF9VU0VSIiwiQUNUSVZFX1VTRVIiXX0sImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoiZW1haWwgcHJvZmlsZSBvcGVuaWQiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwidWNjIjoiMTgwNTY1NiIsImNsaWVudFJvbGUiOlsiR1VFU1RfVVNFUiIsIkFDVElWRV9VU0VSIl0sIm5hbWUiOiJKIFNhaSBLcmlzaG5hIiwicHJlZmVycmVkX3VzZXJuYW1lIjoiMTgwNTY1NiIsImdpdmVuX25hbWUiOiJKIFNhaSBLcmlzaG5hIn0.Mx1CGE_nnQualiAClgYKfq_4n4FTEdC6da5ojCzIA2Agua4QTX4iIqRimg04fhnnwyHWqFSFgJTfl4ZCkI7fj9Tc4zeDshPOPPkCezGoy0yMDjbwhL8GhWP6TUhrOCOfsrAVLb8IADffFdpMnAVzJjjsLkVBXmBhSriCcQuc7mS0MRLwZrAtbt2FbFBhnIq_nOYBK0ATPPoMutTynXK5l_M-q-0OHey4sNxf7K75jQKQmLCeF7n8X0nTucuqkjoqdsrwBWDkJtaYiawNkcq1pEjUwKkBBj_6kkS6mtYQ_6z8GoBdc02y1iggxUGOzjg3ahfqJabPYlX2UzZMWS8qnQ");
-  KiteConnect     kite("h63xizkk69d4im7w", "NDcV1XpOLXm4A986vbBbMAh4E5k6g1Mw");
-  // ... etc for other brokers
+  KiteConnect     kite("h63xizkk69d4im7w", "6PlphqfUoQpvTgGd1h2DsGGKFG0O9x5m");
+
+  // ... create other broker instances as needed
 
   // 2. Create the universal executor
   OrderExecutor executor;
 
   // 3. Register users → brokers
-  executor.registerBroker("J252505",  "angelone",    &angel);
-  executor.registerBroker("1805656",  "aliceblue",   &alice);
-  executor.registerBroker("ILR269",   "kiteconnect", &kite);
+  executor.registerBroker("J252505", "angelone", &angel);
+  executor.registerBroker("1805656", "aliceblue", &alice);
+  executor.registerBroker("ILR269", "kiteconnect", &kite);
 
-  // 4. Build a universal order
-  UniversalOrder order;
-  order.exchange         = "NFO";
-  order.symbol_token     = "35229";
-  order.trading_symbol   = "NIFTY30JUN26C30000";
-  order.transaction_type = "BUY";
-  order.quantity          = 1;
-  order.product           = "INTRADAY";
-  order.order_type        = "MARKET";
+  // 4. Load instrument masters (downloads & caches CSV/JSON files)
+  executor.loadMasters("./masters");
 
-  // 5. Place for any user — the executor routes automatically
-  OrderResult r1 = executor.placeOrder("J252505", order);
-  std::cout << "Angel => " << r1.message << std::endl;
+  // 5. Place order with simplified API — just 8 args!
+  //    exchange, token, side, qty(lots), product, orderType, positionType
+  // OrderResult r1 =
+  //     executor.placeOrder("J252505", // userId
+  //                         "NFO",     // exchange
+  //                         35229,     // exchange_token
+  //                         "BUY",     // transaction_type
+  //                         1, // quantity (in lots, auto-multiplied by
+  //                         lot_size) "MIS",    // product (CNC or MIS)
+  //                         "MARKET", // order_type (MARKET or LIMIT)
+  //                         "OPEN"    // position_type (OPEN or CLOSE)
+  //     );
+  // std::cout << "Angel => " << r1.message << std::endl;
 
-  OrderResult r2 = executor.placeOrder("1805656", order);
-  std::cout << "Alice => " << r2.message << std::endl;
+  // Define users with per-user quantities
+  std::vector<UserOrder> users = {
+      {"J252505", 1}, // 1 lot for Angel user
+      {"1805656", 2}, // 2 lots for Alice user
+      {"ILR269", 1},  // 1 lot for Zerodha user
+  };
 
-  OrderResult r3 = executor.placeOrder("ILR269", order);
-  std::cout << "Kite  => " << r3.message << std::endl;
+  // Place for ALL users in parallel — one call!
+  std::vector<OrderResult> results =
+      executor.placeOrderParallel(users, // list of {userId, qty}
+                                  "NFO", // exchange
+                                  35229, // exchange_token
+                                  "BUY", // transaction_type
+                                  1, // default_quantity (for users with qty=0)
+                                  "MIS",    // product
+                                  "MARKET", // order_type
+                                  "OPEN"    // position_type
+      );
+
+  // Check results
+  for (auto &r : results) {
+    std::cout << r.user_id << " => " << (r.success ? "OK" : "FAIL") << " "
+              << r.message << std::endl;
+  }
 
   curl_global_cleanup();
   return 0;
 }
-

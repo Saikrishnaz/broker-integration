@@ -6,32 +6,33 @@
  * user→broker mapping.  All broker-specific argument translation happens
  * inside this class; the individual broker .cpp files stay untouched.
  *
+ * Includes InstrumentNormalizer for O(1) instrument data lookup from
+ * broker master CSV/JSON files.
+ *
  * Supported brokers:
  *   AliceBlue, AngelOne, Dhan, Fyers, Findoc, Finvasia,
  *   5paisa, KiteConnect (Zerodha), Motilal Oswal, Upstox
  *
- * Dependencies  (same as the broker files):
+ * Dependencies:
  *   - libcurl, nlohmann/json, OpenSSL (for brokers that need it)
  *
- * Usage:
+ * Simplified Usage:
  *   OrderExecutor executor;
- *   executor.registerBroker("user123", "angelone", &angelBrokerInstance);
- *   UniversalOrder order;
- *   order.exchange         = "NSE";
- *   order.symbol_token     = "3045";
- *   order.trading_symbol   = "SBIN-EQ";
- *   order.transaction_type = "BUY";
- *   order.quantity          = 1;
- *   order.product           = "INTRADAY";
- *   order.order_type        = "MARKET";
- *   OrderResult res = executor.placeOrder("user123", order);
+ *   executor.registerBroker("J252505", "angelone", &angel);
+ *   executor.loadMasters("./masters");  // download & cache master files
+ *   OrderResult r = executor.placeOrder(
+ *       "J252505", "NFO", 35229, "BUY", 1, "CNC", "MARKET", "OPEN");
  */
 
 #pragma once
 
+#include <future>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -61,9 +62,10 @@ struct UniversalOrder {
   std::string symbol_token;     // Exchange instrument token / scrip code
   std::string trading_symbol;   // Full trading symbol e.g. "SBIN-EQ"
   std::string transaction_type; // "BUY" or "SELL"
-  int quantity = 0;             // Order quantity
-  std::string product;          // "INTRADAY"/"CNC"/"NRML"/"MIS"/"MARGIN"
-  std::string order_type;       // "MARKET"/"LIMIT"/"SL"/"SL-M"
+  int quantity = 0;             // Order quantity (in lots for F&O)
+  std::string product;          // "CNC" or "MIS"
+  std::string order_type;       // "MARKET" or "LIMIT"
+  std::string position_type;    // "OPEN" or "CLOSE"
 
   // ── Optional fields ────────────────────────────
   double price = 0.0;              // Limit price (0 for MARKET)
@@ -76,6 +78,94 @@ struct UniversalOrder {
 
   // ── 5paisa-specific (auto-derived if blank) ────
   std::string exchange_type = ""; // "C"(Cash) / "D"(Deriv) / "U"(Curr)
+};
+
+// ─────────────────────────────────────────────────────────────────────
+//  InstrumentInfo — data resolved from broker master files
+// ─────────────────────────────────────────────────────────────────────
+
+struct InstrumentInfo {
+  int token = 0;                   // exchange token (the key)
+  std::string trading_symbol = ""; // broker-specific symbol
+  std::string symbol = "";         // underlying (NIFTY, SBIN, etc.)
+  int lot_size = 1;                // lot size for qty multiplication
+  double tick_size = 0.05;         // minimum price increment
+  std::string instrument_key = ""; // upstox instrument_key
+  std::string fytoken = "";        // fyers Fytoken
+  std::string symbol_ticker = "";  // fyers SymbolTicker
+  int instrument_token = 0;        // zerodha instrument_token
+};
+
+// ─────────────────────────────────────────────────────────────────────
+//  InstrumentNormalizer — fast O(1) instrument lookup from master files
+// ─────────────────────────────────────────────────────────────────────
+
+class InstrumentNormalizer {
+public:
+  // Master file URLs (same as Python reference)
+  static const std::map<std::string, std::string> ALICE_URLS;
+  static const std::map<std::string, std::string> FYERS_URLS;
+  static const std::string ANGEL_URL;
+  static const std::string ZERODHA_URL;
+  static const std::string UPSTOX_URL;
+  static const std::map<std::string, std::string> UPSTOX_EXCHANGE_MAP;
+
+  /**
+   * Download and parse all broker master files.
+   * @param mastersDir  Directory to cache CSV/JSON files
+   * @param brokers     Which brokers to load (default: all 5)
+   * @param forceDownload  Re-download even if cached
+   */
+  void loadMasters(const std::string &mastersDir,
+                   const std::vector<std::string> &brokers = {"alice", "angel",
+                                                              "zerodha",
+                                                              "upstox",
+                                                              "fyers"},
+                   bool forceDownload = false);
+
+  /**
+   * O(1) lookup: get instrument info for a broker+exchange+token.
+   * @return pointer to InstrumentInfo, or nullptr if not found
+   */
+  const InstrumentInfo *getInstrument(const std::string &broker,
+                                      const std::string &exchange,
+                                      int token) const;
+
+  /** Check if masters are loaded for a broker. */
+  bool isLoaded(const std::string &broker) const;
+
+private:
+  // Storage: masters_[broker][exchange][token] → InstrumentInfo
+  std::unordered_map<
+      std::string,
+      std::unordered_map<std::string, std::unordered_map<int, InstrumentInfo>>>
+      masters_;
+
+  // Load individual broker masters
+  void loadAliceMaster(const std::string &dir, bool force);
+  void loadAngelMaster(const std::string &dir, bool force);
+  void loadZerodhaMaster(const std::string &dir, bool force);
+  void loadUpstoxMaster(const std::string &dir, bool force);
+  void loadFyersMaster(const std::string &dir, bool force);
+
+  // Helpers
+  static std::string downloadUrl(const std::string &url);
+  static std::vector<std::vector<std::string>>
+  parseCSV(const std::string &data);
+  static int findColumn(const std::vector<std::string> &header,
+                        const std::string &name);
+  static bool fileExists(const std::string &path);
+  static void writeFile(const std::string &path, const std::string &data);
+  static std::string readFile(const std::string &path);
+};
+
+// ─────────────────────────────────────────────────────────────────────
+//  UserOrder — per-user entry for parallel order placement
+// ─────────────────────────────────────────────────────────────────────
+
+struct UserOrder {
+  std::string user_id; // registered userId
+  int quantity = 0;    // qty in lots for this user (0 = use default)
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -123,17 +213,73 @@ public:
   void registerBroker(const std::string &userId, const std::string &brokerName,
                       void *brokerPtr);
 
-  // ── Order Placement ──────────────────────────────────────────────
+  // ── Instrument Master Loading ────────────────────────────────────
   /**
-   * Place an order for a registered user.
-   * Translates UniversalOrder into the broker's native API format.
-   *
-   * @param userId  User whose broker should receive the order
-   * @param order   Universal order parameters
-   * @return        Standardised OrderResult
+   * Download and cache broker master files for instrument lookup.
+   * Must be called once before using the simplified placeOrder.
+   */
+  void loadMasters(const std::string &mastersDir, bool forceDownload = false);
+
+  // ── Order Placement (Full) ────────────────────────────────────────
+  /**
+   * Place an order for a registered user (full UniversalOrder version).
    */
   OrderResult placeOrder(const std::string &userId,
                          const UniversalOrder &order);
+
+  // ── Order Placement (Simplified) ──────────────────────────────────
+  /**
+   * Place an order with minimal arguments. Instrument data is
+   * auto-resolved from master files, quantity auto-multiplied
+   * by lot_size for NFO/BFO.
+   *
+   * @param userId          Registered user ID
+   * @param exchange        "NSE", "BSE", "NFO", "BFO", "MCX"
+   * @param exchange_token  Exchange instrument token (int)
+   * @param transaction_type "BUY" or "SELL"
+   * @param quantity        Qty in lots (auto-multiplied for F&O)
+   * @param product         "CNC" or "MIS"
+   * @param order_type      "MARKET" or "LIMIT"
+   * @param position_type   "OPEN" or "CLOSE"
+   * @param price           Limit price (0 for MARKET)
+   * @param tag             Optional order tag
+   */
+  OrderResult placeOrder(const std::string &userId, const std::string &exchange,
+                         int exchange_token,
+                         const std::string &transaction_type, int quantity,
+                         const std::string &product,
+                         const std::string &order_type,
+                         const std::string &position_type, double price = 0.0,
+                         const std::string &tag = "");
+
+  // ── Thread Pool Parallel Order Placement ──────────────────────────
+  /**
+   * Place orders for MULTIPLE users in parallel using a thread pool.
+   * All users get the same instrument/product/orderType/side — only
+   * userId and quantity vary per user.
+   *
+   * @param users            List of {userId, quantity} pairs
+   * @param exchange         "NSE", "BSE", "NFO", "BFO", "MCX"
+   * @param exchange_token   Exchange instrument token
+   * @param transaction_type "BUY" or "SELL"
+   * @param default_quantity Default qty (used if user qty == 0)
+   * @param product          "CNC" or "MIS"
+   * @param order_type       "MARKET" or "LIMIT"
+   * @param position_type    "OPEN" or "CLOSE"
+   * @param price            Limit price (0 for MARKET)
+   * @param tag              Optional order tag
+   * @return                 Vector of OrderResult (one per user)
+   */
+  std::vector<OrderResult>
+  placeOrderParallel(const std::vector<UserOrder> &users,
+                     const std::string &exchange, int exchange_token,
+                     const std::string &transaction_type, int default_quantity,
+                     const std::string &product, const std::string &order_type,
+                     const std::string &position_type, double price = 0.0,
+                     const std::string &tag = "");
+
+  /** Set max concurrent threads for parallel order placement. */
+  void setMaxWorkers(int n) { max_workers_ = n; }
 
   // ── Utility ──────────────────────────────────────────────────────
   /** List all registered user IDs and their broker names. */
@@ -144,6 +290,9 @@ public:
 
 private:
   std::map<std::string, BrokerInfo> registry_; // userId → BrokerInfo
+  InstrumentNormalizer normalizer_;            // instrument master data
+  int max_workers_ = 20;                       // max parallel threads
+  std::mutex order_mutex_;                     // protects result collection
 
   // ── Broker-specific dispatchers ──────────────────────────────────
   OrderResult placeOrderAliceBlue(AliceBlueBroker *b, const std::string &userId,
