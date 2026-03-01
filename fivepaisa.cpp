@@ -552,42 +552,42 @@ private:
 //  main() – mirrors Python if __name__ == "__main__"
 // ──────────────────────────────────────────────
 
-int main() {
-  // Initialize libcurl globally (once)
-  curl_global_init(CURL_GLOBAL_DEFAULT);
-  try {
-    FivepaisaBroker broker(
-        /* userId        */ "oQAzvA2GowP",
-        /* userKey       */ "nxNxc6UPyjbeiVUMDZFINmNFYcMyxm4X",
-        /* appPassword   */ "gLI00xNJJTn",
-        /* encryptionKey */ "6dd4Gs3HmuLqAR4N2j4nVnDbl7HpeExG",
-        /* clientCode    */ "56988153",
-        /* pin           */ "032002",
-        /* totpKey       */ "GU3DSOBYGE2TGXZVKBDUWRKZ",
-        /* appName       */ "ORDERMED");
+// int main() {
+//   // Initialize libcurl globally (once)
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
+//   try {
+//     FivepaisaBroker broker(
+//         /* userId        */ "oQAzvA2GowP",
+//         /* userKey       */ "nxNxc6UPyjbeiVUMDZFINmNFYcMyxm4X",
+//         /* appPassword   */ "gLI00xNJJTn",
+//         /* encryptionKey */ "6dd4Gs3HmuLqAR4N2j4nVnDbl7HpeExG",
+//         /* clientCode    */ "56988153",
+//         /* pin           */ "032002",
+//         /* totpKey       */ "GU3DSOBYGE2TGXZVKBDUWRKZ",
+//         /* appName       */ "ORDERMED");
 
-    broker.authenticate();
+//     broker.authenticate();
 
-    std::cout << "\n=== Net-wise Positions ===" << std::endl;
-    json positions = broker.getNetwisePositions();
-    std::cout << positions.dump(2) << std::endl;
+//     std::cout << "\n=== Net-wise Positions ===" << std::endl;
+//     json positions = broker.getNetwisePositions();
+//     std::cout << positions.dump(2) << std::endl;
 
-    std::cout << "\n=== Broker State ===" << std::endl;
-    std::cout << "  Authenticated: "
-              << (broker.isAuthenticated() ? "true" : "false") << std::endl;
-    std::cout << "  Client Code:   " << broker.getClientCode() << std::endl;
-    std::cout << "  Access Token:  " << broker.getAccessToken() << std::endl;
+//     std::cout << "\n=== Broker State ===" << std::endl;
+//     std::cout << "  Authenticated: "
+//               << (broker.isAuthenticated() ? "true" : "false") << std::endl;
+//     std::cout << "  Client Code:   " << broker.getClientCode() << std::endl;
+//     std::cout << "  Access Token:  " << broker.getAccessToken() << std::endl;
 
-   auto response = broker.placeOrder("35229", "N", "D", "B", 65, "NRML", "MARKET");    
-   std::cout << "response == " << response.dump(2) << std::endl;
+//    auto response = broker.placeOrder("35229", "N", "D", "B", 65, "NRML", "MARKET");    
+//    std::cout << "response == " << response.dump(2) << std::endl;
   
-} catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+// } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }

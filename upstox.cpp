@@ -574,67 +574,67 @@ private:
 //  main() – Usage demo
 // ──────────────────────────────────────────────
 
-int main() {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+// int main() {
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  try {
-    // Replace with your actual Upstox Bearer token
-    std::string accessToken = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TUFVUTkiLCJqdGkiOiI2OWEzZDNiMTRmNWJkNzNhYjVmYmNkNjkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzcyMzQ0MjQxLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NzI0MDI0MDB9.xfa-5GW0lOB9PZYomxAh24pqbPgXD9TYzFswJtHuyN4";
+//   try {
+//     // Replace with your actual Upstox Bearer token
+//     std::string accessToken = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TUFVUTkiLCJqdGkiOiI2OWEzZDNiMTRmNWJkNzNhYjVmYmNkNjkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzcyMzQ0MjQxLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NzI0MDI0MDB9.xfa-5GW0lOB9PZYomxAh24pqbPgXD9TYzFswJtHuyN4";
 
-    UpstoxBroker broker(accessToken);
+//     UpstoxBroker broker(accessToken);
 
-    // ── Example: Get profile ──
-    std::cout << "\n=== Profile ===" << std::endl;
-    json profile = broker.getProfile();
-    std::cout << profile.dump(2) << std::endl;
+//     // ── Example: Get profile ──
+//     std::cout << "\n=== Profile ===" << std::endl;
+//     json profile = broker.getProfile();
+//     std::cout << profile.dump(2) << std::endl;
 
-    // ── Example: Get funds & margin ──
-    std::cout << "\n=== Funds & Margin ===" << std::endl;
-    json funds = broker.getFundsAndMargin();
-    std::cout << funds.dump(2) << std::endl;
+//     // ── Example: Get funds & margin ──
+//     std::cout << "\n=== Funds & Margin ===" << std::endl;
+//     json funds = broker.getFundsAndMargin();
+//     std::cout << funds.dump(2) << std::endl;
 
-    // ── Example: Place a market order ──
-    std::cout << "\n=== Place Order ===" << std::endl;
-    json orderResp = broker.placeOrder(
-        /* instrumentToken  */ "NSE_EQ|INE669E01016",
-        /* quantity         */ 1,
-        /* product          */ "I",
-        /* validity         */ "DAY",
-        /* orderType        */ "MARKET",
-        /* transactionType  */ "BUY");
-    std::cout << orderResp.dump(2) << std::endl;
+//     // ── Example: Place a market order ──
+//     std::cout << "\n=== Place Order ===" << std::endl;
+//     json orderResp = broker.placeOrder(
+//         /* instrumentToken  */ "NSE_EQ|INE669E01016",
+//         /* quantity         */ 1,
+//         /* product          */ "I",
+//         /* validity         */ "DAY",
+//         /* orderType        */ "MARKET",
+//         /* transactionType  */ "BUY");
+//     std::cout << orderResp.dump(2) << std::endl;
 
-    // ── Example: Get order book ──
-    std::cout << "\n=== Order Book ===" << std::endl;
-    json orders = broker.getOrderBook();
-    std::cout << orders.dump(2) << std::endl;
+//     // ── Example: Get order book ──
+//     std::cout << "\n=== Order Book ===" << std::endl;
+//     json orders = broker.getOrderBook();
+//     std::cout << orders.dump(2) << std::endl;
 
-    // ── Example: Get positions ──
-    std::cout << "\n=== Positions ===" << std::endl;
-    json positions = broker.getPositions();
-    std::cout << positions.dump(2) << std::endl;
+//     // ── Example: Get positions ──
+//     std::cout << "\n=== Positions ===" << std::endl;
+//     json positions = broker.getPositions();
+//     std::cout << positions.dump(2) << std::endl;
 
-    // ── Example: Get holdings ──
-    std::cout << "\n=== Holdings ===" << std::endl;
-    json holdings = broker.getHoldings();
-    std::cout << holdings.dump(2) << std::endl;
+//     // ── Example: Get holdings ──
+//     std::cout << "\n=== Holdings ===" << std::endl;
+//     json holdings = broker.getHoldings();
+//     std::cout << holdings.dump(2) << std::endl;
 
-    // ── Example: Get LTP ──
-    std::cout << "\n=== LTP ===" << std::endl;
-    json ltp = broker.getLTP("NSE_EQ|INE669E01016");
-    std::cout << ltp.dump(2) << std::endl;
+//     // ── Example: Get LTP ──
+//     std::cout << "\n=== LTP ===" << std::endl;
+//     json ltp = broker.getLTP("NSE_EQ|INE669E01016");
+//     std::cout << ltp.dump(2) << std::endl;
 
-    // ── Example: Get market quote ──
-    std::cout << "\n=== Market Quote ===" << std::endl;
-    json quote = broker.getMarketQuote("NSE_EQ|INE669E01016");
-    std::cout << quote.dump(2) << std::endl;
+//     // ── Example: Get market quote ──
+//     std::cout << "\n=== Market Quote ===" << std::endl;
+//     json quote = broker.getMarketQuote("NSE_EQ|INE669E01016");
+//     std::cout << quote.dump(2) << std::endl;
 
-  } catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+//   } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }

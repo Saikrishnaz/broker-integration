@@ -665,61 +665,61 @@ private:
 //  main() – Usage demo (mirrors td_order.cpp style)
 // ──────────────────────────────────────────────
 
-int main() {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+// int main() {
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  try {
-    // Replace with your actual AliceBlue Bearer token
-    std::string token = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyam9lOFVScGxZU3FTcDB3RDNVemVBQkgxYkpmOE4wSDRDMGVVSWhXUVAwIn0.eyJleHAiOjE3Nzc0NzEzODYsImlhdCI6MTc3MjI4OTU0NywianRpIjoib25ydHJ0OjRmNDU3OGNjLTk3NWEtOWU0ZC0zMDJlLTdmZjE5ZWFkZTA4NCIsImlzcyI6Imh0dHBzOi8vaWRhYXMuYWxpY2VibHVlb25saW5lLmNvbS9pZGFhcy9yZWFsbXMvQWxpY2VCbHVlIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6IjVlZjY2YmZiLTRjNWQtNDM5OS1iNmM2LTdjODViNjE0NjU2ZiIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFsaWNlLWtiIiwic2lkIjoiYzlkMjdhNjQtNThkMi0yMzg3LTFhZmUtM2ZjYTgyZDE5YTNmIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMiIsImh0dHA6Ly9sb2NhbGhvc3Q6NTA1MCIsImh0dHA6Ly9sb2NhbGhvc3Q6OTk0MyIsImh0dHA6Ly9sb2NhbGhvc3Q6OTAwMCJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLWFsaWNlYmx1ZWtiIiwidW1hX2F1dGhvcml6YXRpb24iXX0sInJlc291cmNlX2FjY2VzcyI6eyJhbGljZS1rYiI6eyJyb2xlcyI6WyJHVUVTVF9VU0VSIiwiQUNUSVZFX1VTRVIiXX0sImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoiZW1haWwgcHJvZmlsZSBvcGVuaWQiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwidWNjIjoiMTgwNTY1NiIsImNsaWVudFJvbGUiOlsiR1VFU1RfVVNFUiIsIkFDVElWRV9VU0VSIl0sIm5hbWUiOiJKIFNhaSBLcmlzaG5hIiwicHJlZmVycmVkX3VzZXJuYW1lIjoiMTgwNTY1NiIsImdpdmVuX25hbWUiOiJKIFNhaSBLcmlzaG5hIn0.YYha4jvOKaDVxckOaBXz8TgKTM7p53ntVz1katzNKd9puMgcR745-f9-5Ol3biN_U-ig0nrFnmzgqASGUU_3pB3jK7DsNxrlecLb5wbdbF7F_Bk9pBCXrUdkAYAAXurhttacPyjADdbIbMGkrUv9q_RtqCU3mE-ICyZx7MnxMksOxAyexyMcAzO4MCJoCKXtPHeuE_fqMpR0Xc8_l2ksM5xFYXtQMviaYJT3runBNLUziLaoDuy6654XDAkfAw84unaL_A1nWXSjCdCs6V5HhrB9iJl5tMfq7C2EcmFqppUTBN-JNwy55V8RHc7kTCq3fcDIMOFZRESRGjgy7D_puA";
+//   try {
+//     // Replace with your actual AliceBlue Bearer token
+//     std::string token = "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyam9lOFVScGxZU3FTcDB3RDNVemVBQkgxYkpmOE4wSDRDMGVVSWhXUVAwIn0.eyJleHAiOjE3Nzc0NzEzODYsImlhdCI6MTc3MjI4OTU0NywianRpIjoib25ydHJ0OjRmNDU3OGNjLTk3NWEtOWU0ZC0zMDJlLTdmZjE5ZWFkZTA4NCIsImlzcyI6Imh0dHBzOi8vaWRhYXMuYWxpY2VibHVlb25saW5lLmNvbS9pZGFhcy9yZWFsbXMvQWxpY2VCbHVlIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6IjVlZjY2YmZiLTRjNWQtNDM5OS1iNmM2LTdjODViNjE0NjU2ZiIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFsaWNlLWtiIiwic2lkIjoiYzlkMjdhNjQtNThkMi0yMzg3LTFhZmUtM2ZjYTgyZDE5YTNmIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMiIsImh0dHA6Ly9sb2NhbGhvc3Q6NTA1MCIsImh0dHA6Ly9sb2NhbGhvc3Q6OTk0MyIsImh0dHA6Ly9sb2NhbGhvc3Q6OTAwMCJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLWFsaWNlYmx1ZWtiIiwidW1hX2F1dGhvcml6YXRpb24iXX0sInJlc291cmNlX2FjY2VzcyI6eyJhbGljZS1rYiI6eyJyb2xlcyI6WyJHVUVTVF9VU0VSIiwiQUNUSVZFX1VTRVIiXX0sImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoiZW1haWwgcHJvZmlsZSBvcGVuaWQiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwidWNjIjoiMTgwNTY1NiIsImNsaWVudFJvbGUiOlsiR1VFU1RfVVNFUiIsIkFDVElWRV9VU0VSIl0sIm5hbWUiOiJKIFNhaSBLcmlzaG5hIiwicHJlZmVycmVkX3VzZXJuYW1lIjoiMTgwNTY1NiIsImdpdmVuX25hbWUiOiJKIFNhaSBLcmlzaG5hIn0.YYha4jvOKaDVxckOaBXz8TgKTM7p53ntVz1katzNKd9puMgcR745-f9-5Ol3biN_U-ig0nrFnmzgqASGUU_3pB3jK7DsNxrlecLb5wbdbF7F_Bk9pBCXrUdkAYAAXurhttacPyjADdbIbMGkrUv9q_RtqCU3mE-ICyZx7MnxMksOxAyexyMcAzO4MCJoCKXtPHeuE_fqMpR0Xc8_l2ksM5xFYXtQMviaYJT3runBNLUziLaoDuy6654XDAkfAw84unaL_A1nWXSjCdCs6V5HhrB9iJl5tMfq7C2EcmFqppUTBN-JNwy55V8RHc7kTCq3fcDIMOFZRESRGjgy7D_puA";
 
-    AliceBlueBroker broker(token);
+//     AliceBlueBroker broker(token);
 
-    // ── Example: Place a market order on NFO ──
-    // json orderResponse = broker.placeOrder(
-    //     /* exchange        */ "NFO",
-    //     /* instrumentId    */ "35229",
-    //     /* transactionType */ "BUY",
-    //     /* quantity        */ 65,
-    //     /* product         */ "INTRADAY",
-    //     /* orderComplexity */ "REGULAR",
-    //     /* orderType       */ "MARKET",
-    //     /* validity        */ "DAY");
+//     // ── Example: Place a market order on NFO ──
+//     // json orderResponse = broker.placeOrder(
+//     //     /* exchange        */ "NFO",
+//     //     /* instrumentId    */ "35229",
+//     //     /* transactionType */ "BUY",
+//     //     /* quantity        */ 65,
+//     //     /* product         */ "INTRADAY",
+//     //     /* orderComplexity */ "REGULAR",
+//     //     /* orderType       */ "MARKET",
+//     //     /* validity        */ "DAY");
 
-    // std::cout << "\n=== Place Order Response ===" << std::endl;
-    // std::cout << orderResponse.dump(2) << std::endl;
-    json Orderhistory = broker.getOrderBook();
-    std::cout<<"order history : " << Orderhistory<<std::endl;
-    // // ── Example: Get positions ──
-    // std::cout << "\n=== Positions ===" << std::endl;
-    // json positions = broker.getPositions();
-    // std::cout << positions.dump(2) << std::endl;
+//     // std::cout << "\n=== Place Order Response ===" << std::endl;
+//     // std::cout << orderResponse.dump(2) << std::endl;
+//     json Orderhistory = broker.getOrderBook();
+//     std::cout<<"order history : " << Orderhistory<<std::endl;
+//     // // ── Example: Get positions ──
+//     // std::cout << "\n=== Positions ===" << std::endl;
+//     // json positions = broker.getPositions();
+//     // std::cout << positions.dump(2) << std::endl;
 
-    // // ── Example: Get order book ──
-    // std::cout << "\n=== Order Book ===" << std::endl;
-    // json orderBook = broker.getOrderBook();
-    // std::cout << orderBook.dump(2) << std::endl;
+//     // // ── Example: Get order book ──
+//     // std::cout << "\n=== Order Book ===" << std::endl;
+//     // json orderBook = broker.getOrderBook();
+//     // std::cout << orderBook.dump(2) << std::endl;
 
-    // // ── Example: Get limits ──
-    // std::cout << "\n=== Limits ===" << std::endl;
-    // json limits = broker.getLimits();
-    // std::cout << limits.dump(2) << std::endl;
+//     // // ── Example: Get limits ──
+//     // std::cout << "\n=== Limits ===" << std::endl;
+//     // json limits = broker.getLimits();
+//     // std::cout << limits.dump(2) << std::endl;
 
-    // // ── Example: Get holdings ──
-    // std::cout << "\n=== Holdings ===" << std::endl;
-    // json holdings = broker.getHoldings("CNC");
-    // std::cout << holdings.dump(2) << std::endl;
+//     // // ── Example: Get holdings ──
+//     // std::cout << "\n=== Holdings ===" << std::endl;
+//     // json holdings = broker.getHoldings("CNC");
+//     // std::cout << holdings.dump(2) << std::endl;
 
-    // // ── Example: Get profile ──
-    // std::cout << "\n=== Profile ===" << std::endl;
-    // json profile = broker.getProfile();
-    // std::cout << profile.dump(2) << std::endl;
+//     // // ── Example: Get profile ──
+//     // std::cout << "\n=== Profile ===" << std::endl;
+//     // json profile = broker.getProfile();
+//     // std::cout << profile.dump(2) << std::endl;
 
-  } catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+//   } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }

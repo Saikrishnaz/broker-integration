@@ -409,71 +409,71 @@ private:
 //  main() – Usage demo
 // ──────────────────────────────────────────────
 
-int main() {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+// int main() {
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  try {
-    // Replace with your actual Motilal Oswal credentials
-    std::string apiKey = "lQDa81JYve1EPWMm";
-    std::string baseUrl = "https://openapi.motilaloswal.com";
-    std::string clientCode = "EMUM503065";
-    std::string authToken =
-        "cdeac554d66f4ae9b6f4b579f8a55e24_M"; // Provide your auth token directly
+//   try {
+//     // Replace with your actual Motilal Oswal credentials
+//     std::string apiKey = "lQDa81JYve1EPWMm";
+//     std::string baseUrl = "https://openapi.motilaloswal.com";
+//     std::string clientCode = "EMUM503065";
+//     std::string authToken =
+//         "cdeac554d66f4ae9b6f4b579f8a55e24_M"; // Provide your auth token directly
 
-    MotilalOswalBroker broker(apiKey, baseUrl, clientCode, authToken);
+//     MotilalOswalBroker broker(apiKey, baseUrl, clientCode, authToken);
 
-    // ── Example: Get profile ──
-    std::cout << "\n=== Profile ===" << std::endl;
-    json profile = broker.getProfile();
-    std::cout << profile.dump(2) << std::endl;
+//     // ── Example: Get profile ──
+//     std::cout << "\n=== Profile ===" << std::endl;
+//     json profile = broker.getProfile();
+//     std::cout << profile.dump(2) << std::endl;
 
-    // ── Example: Get margin report ──
-    std::cout << "\n=== Margin Report ===" << std::endl;
-    json margin = broker.getReportMargin();
-    std::cout << margin.dump(2) << std::endl;
+//     // ── Example: Get margin report ──
+//     std::cout << "\n=== Margin Report ===" << std::endl;
+//     json margin = broker.getReportMargin();
+//     std::cout << margin.dump(2) << std::endl;
 
-    // ── Example: Place order ──
-    std::cout << "\n=== Place Order ===" << std::endl;
-    json orderInfo = {{"clientcode", clientCode}, {"exchange", "NSEFO"},
-                      {"symboltoken", 35229},    {"buyorsell", "BUY"},
-                      {"ordertype", "LIMIT"},       {"producttype", "VALUEPLUS"},
-                      {"orderduration", "DAY"},   {"price", 20.5},
-                      {"triggerprice", 0},      {"quantityinlot", 1},
-                      {"disclosedquantity", 0}, {"amoorder", "N"},
-                       {"algoid",""},           {"tag","Helo"}};
-    json orderResp = broker.placeOrder(orderInfo);
-    std::cout << orderResp.dump(2) << std::endl;
+//     // ── Example: Place order ──
+//     std::cout << "\n=== Place Order ===" << std::endl;
+//     json orderInfo = {{"clientcode", clientCode}, {"exchange", "NSEFO"},
+//                       {"symboltoken", 35229},    {"buyorsell", "BUY"},
+//                       {"ordertype", "LIMIT"},       {"producttype", "VALUEPLUS"},
+//                       {"orderduration", "DAY"},   {"price", 20.5},
+//                       {"triggerprice", 0},      {"quantityinlot", 1},
+//                       {"disclosedquantity", 0}, {"amoorder", "N"},
+//                        {"algoid",""},           {"tag","Helo"}};
+//     json orderResp = broker.placeOrder(orderInfo);
+//     std::cout << orderResp.dump(2) << std::endl;
 
-    // ── Example: Get order book ──
-    std::cout << "\n=== Order Book ===" << std::endl;
-    json obInfo = {{"clientcode", clientCode}};
-    json orderBook = broker.getOrderBook(obInfo);
-    std::cout << orderBook.dump(2) << std::endl;
+//     // ── Example: Get order book ──
+//     std::cout << "\n=== Order Book ===" << std::endl;
+//     json obInfo = {{"clientcode", clientCode}};
+//     json orderBook = broker.getOrderBook(obInfo);
+//     std::cout << orderBook.dump(2) << std::endl;
 
-    // ── Example: Get positions ──
-    std::cout << "\n=== Positions ===" << std::endl;
-    json positions = broker.getPositions();
-    std::cout << positions.dump(2) << std::endl;
+//     // ── Example: Get positions ──
+//     std::cout << "\n=== Positions ===" << std::endl;
+//     json positions = broker.getPositions();
+//     std::cout << positions.dump(2) << std::endl;
 
-    // ── Example: Get DP holdings ──
-    std::cout << "\n=== DP Holdings ===" << std::endl;
-    json holdings = broker.getDPHolding();
-    std::cout << holdings.dump(2) << std::endl;
+//     // ── Example: Get DP holdings ──
+//     std::cout << "\n=== DP Holdings ===" << std::endl;
+//     json holdings = broker.getDPHolding();
+//     std::cout << holdings.dump(2) << std::endl;
 
-    // ── Example: Get LTP ──
-    std::cout << "\n=== LTP ===" << std::endl;
-    json ltpData = {{"clientcode", clientCode},
-                    {"exchange", "NSE"},
-                    {"symboltoken", "3045"}};
-    json ltp = broker.getLtp(ltpData);
-    std::cout << ltp.dump(2) << std::endl;
+//     // ── Example: Get LTP ──
+//     std::cout << "\n=== LTP ===" << std::endl;
+//     json ltpData = {{"clientcode", clientCode},
+//                     {"exchange", "NSE"},
+//                     {"symboltoken", "3045"}};
+//     json ltp = broker.getLtp(ltpData);
+//     std::cout << ltp.dump(2) << std::endl;
 
-  } catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+//   } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }

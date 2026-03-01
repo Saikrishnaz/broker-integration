@@ -548,69 +548,69 @@ private:
 //  main() – Usage demo
 // ──────────────────────────────────────────────
 
-int main() {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+// int main() {
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  try {
-    // Replace with your actual Angel One credentials
-    std::string apiKey = "FZLDMjMp";
-    std::string accessToken =
-        "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkoyNTI1MDUiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pFekxDSnpiM1Z5WTJVaU9pSXpJaXdpWkdWMmFXTmxYMmxrSWpvaVkyRTRaakJoTkdJdFl6QmtPQzB6T0RZNUxUZzRNVFl0T0RBNU1EQTJaRFZpTnpZMklpd2lhMmxrSWpvaWRISmhaR1ZmYTJWNVgzWXlJaXdpYjIxdVpXMWhibUZuWlhKcFpDSTZNVE1zSW5CeWIyUjFZM1J6SWpwN0ltUmxiV0YwSWpwN0luTjBZWFIxY3lJNkltRmpkR2wyWlNKOUxDSnRaaUk2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlgwc0ltbHpjeUk2SW5SeVlXUmxYMnh2WjJsdVgzTmxjblpwWTJVaUxDSnpkV0lpT2lKS01qVXlOVEExSWl3aVpYaHdJam94TnpjeU5ETTJNakUzTENKdVltWWlPakUzTnpJek5EazJNemNzSW1saGRDSTZNVGMzTWpNME9UWXpOeXdpYW5ScElqb2lNbUpsTVRsbFpqWXROVEkxT1MwME5UQXpMVGxoTVRFdFkyWmhPREEzTXpRelpEY3hJaXdpVkc5clpXNGlPaUlpZlEuZGtqQWZlOHVCRXhOeDRNN2FDNTg0X1FSV1h3SkhnQWwwNzhXNTlLa1FVTldDdm0zdy0xMHdOZW1IMEtpRjFHeklES3hPX0hTa1lCN3U5QkQ4UmZORFZleWZSWHRYQnBnNkpJRWx0NExFbHFXX3JFQ1ZjSVI0NnNJSGhqM3pPVUM0aGZWRVdjN3hkakVmVW53bVZiUEdOUnlsMkkzeDJ4VjRJVnlmaVVyVkRBIiwiQVBJLUtFWSI6IkZaTERNak1wIiwiWC1PTEQtQVBJLUtFWSI6dHJ1ZSwiaWF0IjoxNzcyMzQ5ODE3LCJleHAiOjE3NzIzODk4MDB9.8_NaN5qtNu5Iui24k2EqCeU9UjjpLmynPPrHe2YwAYkp9nAktIG-2F6ZipaNbiv62fdQhuBD9rqLyeQpWbXpsg"; // Provide your access token directly
-    std::string clientCode = "J252505";
+//   try {
+//     // Replace with your actual Angel One credentials
+//     std::string apiKey = "FZLDMjMp";
+//     std::string accessToken =
+//         "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkoyNTI1MDUiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pFekxDSnpiM1Z5WTJVaU9pSXpJaXdpWkdWMmFXTmxYMmxrSWpvaVkyRTRaakJoTkdJdFl6QmtPQzB6T0RZNUxUZzRNVFl0T0RBNU1EQTJaRFZpTnpZMklpd2lhMmxrSWpvaWRISmhaR1ZmYTJWNVgzWXlJaXdpYjIxdVpXMWhibUZuWlhKcFpDSTZNVE1zSW5CeWIyUjFZM1J6SWpwN0ltUmxiV0YwSWpwN0luTjBZWFIxY3lJNkltRmpkR2wyWlNKOUxDSnRaaUk2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlgwc0ltbHpjeUk2SW5SeVlXUmxYMnh2WjJsdVgzTmxjblpwWTJVaUxDSnpkV0lpT2lKS01qVXlOVEExSWl3aVpYaHdJam94TnpjeU5ETTJNakUzTENKdVltWWlPakUzTnpJek5EazJNemNzSW1saGRDSTZNVGMzTWpNME9UWXpOeXdpYW5ScElqb2lNbUpsTVRsbFpqWXROVEkxT1MwME5UQXpMVGxoTVRFdFkyWmhPREEzTXpRelpEY3hJaXdpVkc5clpXNGlPaUlpZlEuZGtqQWZlOHVCRXhOeDRNN2FDNTg0X1FSV1h3SkhnQWwwNzhXNTlLa1FVTldDdm0zdy0xMHdOZW1IMEtpRjFHeklES3hPX0hTa1lCN3U5QkQ4UmZORFZleWZSWHRYQnBnNkpJRWx0NExFbHFXX3JFQ1ZjSVI0NnNJSGhqM3pPVUM0aGZWRVdjN3hkakVmVW53bVZiUEdOUnlsMkkzeDJ4VjRJVnlmaVVyVkRBIiwiQVBJLUtFWSI6IkZaTERNak1wIiwiWC1PTEQtQVBJLUtFWSI6dHJ1ZSwiaWF0IjoxNzcyMzQ5ODE3LCJleHAiOjE3NzIzODk4MDB9.8_NaN5qtNu5Iui24k2EqCeU9UjjpLmynPPrHe2YwAYkp9nAktIG-2F6ZipaNbiv62fdQhuBD9rqLyeQpWbXpsg"; // Provide your access token directly
+//     std::string clientCode = "J252505";
 
-    AngelOneBroker broker(apiKey, accessToken, clientCode);
+//     AngelOneBroker broker(apiKey, accessToken, clientCode);
 
-    // ── Example: Get profile ──
-    std::cout << "\n=== Profile ===" << std::endl;
-    json profile = broker.getProfile();
-    std::cout << profile.dump(2) << std::endl;
+//     // ── Example: Get profile ──
+//     std::cout << "\n=== Profile ===" << std::endl;
+//     json profile = broker.getProfile();
+//     std::cout << profile.dump(2) << std::endl;
 
-    // ── Example: Get RMS/funds ──
-    std::cout << "\n=== RMS Limit ===" << std::endl;
-    json rms = broker.getRmsLimit();
-    std::cout << rms.dump(2) << std::endl;
+//     // ── Example: Get RMS/funds ──
+//     std::cout << "\n=== RMS Limit ===" << std::endl;
+//     json rms = broker.getRmsLimit();
+//     std::cout << rms.dump(2) << std::endl;
 
-    // ── Example: Place order ──
-    std::cout << "\n=== Place Order ===" << std::endl;
-    json orderParams = {{"variety", "NORMAL"},
-                        {"tradingsymbol", "NIFTY30JUN26C30000"},
-                        {"symboltoken", "35229"},
-                        {"transactiontype", "BUY"},
-                        {"exchange", "NFO"},
-                        {"ordertype", "MARKET"},
-                        {"producttype", "INTRADAY"},
-                        {"duration", "DAY"},
-                        {"price", "0"},
-                        {"quantity", "65"}};
-    json orderResp = broker.placeOrder(orderParams);
-    std::cout << orderResp.dump(2) << std::endl;
+//     // ── Example: Place order ──
+//     std::cout << "\n=== Place Order ===" << std::endl;
+//     json orderParams = {{"variety", "NORMAL"},
+//                         {"tradingsymbol", "NIFTY30JUN26C30000"},
+//                         {"symboltoken", "35229"},
+//                         {"transactiontype", "BUY"},
+//                         {"exchange", "NFO"},
+//                         {"ordertype", "MARKET"},
+//                         {"producttype", "INTRADAY"},
+//                         {"duration", "DAY"},
+//                         {"price", "0"},
+//                         {"quantity", "65"}};
+//     json orderResp = broker.placeOrder(orderParams);
+//     std::cout << orderResp.dump(2) << std::endl;
 
-    // ── Example: Get order book ──
-    std::cout << "\n=== Order Book ===" << std::endl;
-    json orderBook = broker.getOrderBook();
-    std::cout << orderBook.dump(2) << std::endl;
+//     // ── Example: Get order book ──
+//     std::cout << "\n=== Order Book ===" << std::endl;
+//     json orderBook = broker.getOrderBook();
+//     std::cout << orderBook.dump(2) << std::endl;
 
-    // ── Example: Get positions ──
-    std::cout << "\n=== Positions ===" << std::endl;
-    json positions = broker.getPositions();
-    std::cout << positions.dump(2) << std::endl;
+//     // ── Example: Get positions ──
+//     std::cout << "\n=== Positions ===" << std::endl;
+//     json positions = broker.getPositions();
+//     std::cout << positions.dump(2) << std::endl;
 
-    // ── Example: Get holdings ──
-    std::cout << "\n=== Holdings ===" << std::endl;
-    json holdings = broker.getHoldings();
-    std::cout << holdings.dump(2) << std::endl;
+//     // ── Example: Get holdings ──
+//     std::cout << "\n=== Holdings ===" << std::endl;
+//     json holdings = broker.getHoldings();
+//     std::cout << holdings.dump(2) << std::endl;
 
-    // ── Example: Get LTP ──
-    std::cout << "\n=== LTP ===" << std::endl;
-    json ltp = broker.getLtpData("NSE", "SBIN-EQ", "3045");
-    std::cout << ltp.dump(2) << std::endl;
+//     // ── Example: Get LTP ──
+//     std::cout << "\n=== LTP ===" << std::endl;
+//     json ltp = broker.getLtpData("NSE", "SBIN-EQ", "3045");
+//     std::cout << ltp.dump(2) << std::endl;
 
-  } catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+//   } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }

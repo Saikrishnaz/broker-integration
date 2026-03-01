@@ -799,69 +799,69 @@ private:
 //  main() – Usage demo
 // ──────────────────────────────────────────────
 
-int main() {
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+// int main() {
+//   curl_global_init(CURL_GLOBAL_DEFAULT);
 
-  try {
-    // Replace with your actual API key and access token
-    std::string apiKey = "h63xizkk69d4im7w";
-    std::string accessToken = "NDcV1XpOLXm4A986vbBbMAh4E5k6g1Mw";
+//   try {
+//     // Replace with your actual API key and access token
+//     std::string apiKey = "h63xizkk69d4im7w";
+//     std::string accessToken = "NDcV1XpOLXm4A986vbBbMAh4E5k6g1Mw";
 
-    KiteConnect kite(apiKey, accessToken);
+//     KiteConnect kite(apiKey, accessToken);
 
-    // ── Example: Get profile ──
-    std::cout << "\n=== Profile ===" << std::endl;
-    json prof = kite.profile();
-    std::cout << prof.dump(2) << std::endl;
+//     // ── Example: Get profile ──
+//     std::cout << "\n=== Profile ===" << std::endl;
+//     json prof = kite.profile();
+//     std::cout << prof.dump(2) << std::endl;
 
-    // ── Example: Get margins ──
-    std::cout << "\n=== Margins ===" << std::endl;
-    json marg = kite.margins();
-    std::cout << marg.dump(2) << std::endl;
+//     // ── Example: Get margins ──
+//     std::cout << "\n=== Margins ===" << std::endl;
+//     json marg = kite.margins();
+//     std::cout << marg.dump(2) << std::endl;
 
-    // ── Example: Place a regular market order ──
-    std::cout << "\n=== Place Order ===" << std::endl;
-    std::string orderId = kite.placeOrder(
-        /* variety          */ KiteConnect::VARIETY_REGULAR,
-        /* exchange         */ KiteConnect::EXCHANGE_NSE,
-        /* tradingsymbol    */ "INFY",
-        /* transactionType  */ KiteConnect::TRANSACTION_TYPE_BUY,
-        /* quantity         */ 1,
-        /* product          */ KiteConnect::PRODUCT_CNC,
-        /* orderType        */ KiteConnect::ORDER_TYPE_MARKET);
-    std::cout << "Order ID: " << orderId << std::endl;
+//     // ── Example: Place a regular market order ──
+//     std::cout << "\n=== Place Order ===" << std::endl;
+//     std::string orderId = kite.placeOrder(
+//         /* variety          */ KiteConnect::VARIETY_REGULAR,
+//         /* exchange         */ KiteConnect::EXCHANGE_NSE,
+//         /* tradingsymbol    */ "INFY",
+//         /* transactionType  */ KiteConnect::TRANSACTION_TYPE_BUY,
+//         /* quantity         */ 1,
+//         /* product          */ KiteConnect::PRODUCT_CNC,
+//         /* orderType        */ KiteConnect::ORDER_TYPE_MARKET);
+//     std::cout << "Order ID: " << orderId << std::endl;
 
-    // ── Example: Get order book ──
-    std::cout << "\n=== Orders ===" << std::endl;
-    json allOrders = kite.orders();
-    std::cout << allOrders.dump(2) << std::endl;
+//     // ── Example: Get order book ──
+//     std::cout << "\n=== Orders ===" << std::endl;
+//     json allOrders = kite.orders();
+//     std::cout << allOrders.dump(2) << std::endl;
 
-    // ── Example: Get positions ──
-    std::cout << "\n=== Positions ===" << std::endl;
-    json pos = kite.positions();
-    std::cout << pos.dump(2) << std::endl;
+//     // ── Example: Get positions ──
+//     std::cout << "\n=== Positions ===" << std::endl;
+//     json pos = kite.positions();
+//     std::cout << pos.dump(2) << std::endl;
 
-    // ── Example: Get holdings ──
-    std::cout << "\n=== Holdings ===" << std::endl;
-    json hold = kite.holdings();
-    std::cout << hold.dump(2) << std::endl;
+//     // ── Example: Get holdings ──
+//     std::cout << "\n=== Holdings ===" << std::endl;
+//     json hold = kite.holdings();
+//     std::cout << hold.dump(2) << std::endl;
 
-    // ── Example: Get LTP ──
-    std::cout << "\n=== LTP ===" << std::endl;
-    json ltpData = kite.ltp({"NSE:INFY", "NSE:RELIANCE"});
-    std::cout << ltpData.dump(2) << std::endl;
+//     // ── Example: Get LTP ──
+//     std::cout << "\n=== LTP ===" << std::endl;
+//     json ltpData = kite.ltp({"NSE:INFY", "NSE:RELIANCE"});
+//     std::cout << ltpData.dump(2) << std::endl;
 
-    // ── Example: Get GTT triggers ──
-    std::cout << "\n=== GTT Triggers ===" << std::endl;
-    json gtts = kite.getGtts();
-    std::cout << gtts.dump(2) << std::endl;
+//     // ── Example: Get GTT triggers ──
+//     std::cout << "\n=== GTT Triggers ===" << std::endl;
+//     json gtts = kite.getGtts();
+//     std::cout << gtts.dump(2) << std::endl;
 
-  } catch (const std::exception &e) {
-    std::cerr << "Error: " << e.what() << std::endl;
-    curl_global_cleanup();
-    return 1;
-  }
+//   } catch (const std::exception &e) {
+//     std::cerr << "Error: " << e.what() << std::endl;
+//     curl_global_cleanup();
+//     return 1;
+//   }
 
-  curl_global_cleanup();
-  return 0;
-}
+//   curl_global_cleanup();
+//   return 0;
+// }
