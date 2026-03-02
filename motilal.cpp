@@ -55,16 +55,17 @@ public:
    * @param browserName  Browser name (for WEB source)
    * @param browserVer   Browser version (for WEB source)
    */
-  MotilalOswalBroker(const std::string &apiKey, const std::string &baseUrl,
+  MotilalOswalBroker(const std::string &apiKey,
                      const std::string &clientCode,
                      const std::string &authToken,
                      const std::string &sourceId = "WEB",
                      const std::string &browserName = "Chrome",
                      const std::string &browserVer = "120.0")
-      : apiKey_(apiKey), baseUrl_(baseUrl), clientCode_(clientCode),
+      : apiKey_(apiKey), clientCode_(clientCode),
         authToken_(authToken), sourceId_(sourceId), browserName_(browserName),
-        browserVersion_(browserVer) {
-    std::cout << "Motilal Oswal Broker initialized." << std::endl;
+          browserVersion_(browserVer) {
+    const std::string baseUrl  = "https://openapi.motilaloswal.com";
+    std::cout << "Motilal Oswal Broker initialized with base URL: " << baseUrl << std::endl;
   }
 
   // ─── User Profile ───────────────────────────

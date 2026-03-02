@@ -69,6 +69,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <iomanip>  // for std::put_time and formatting
 
 #ifdef _WIN32
 #include <direct.h> // _mkdir
@@ -415,6 +416,288 @@ OrderExecutor::OrderExecutor() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
+//  TradeLogger — ASYNC implementation
+//  logTrade() / log() → push to queue (microseconds)
+//  Background thread → drains queue → writes to disk
+// ═════════════════════════════════════════════════════════════════════
+
+TradeLogger::TradeLogger() {
+  // Writer thread is started in init() once paths are known
+}
+
+TradeLogger::~TradeLogger() {
+  // Signal the writer thread to stop and flush remaining entries
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    stop_ = true;
+  }
+  queue_cv_.notify_one();
+  if (writer_thread_.joinable())
+    writer_thread_.join();
+}
+
+std::string TradeLogger::timestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto t = std::chrono::system_clock::to_time_t(now);
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()) %
+            1000;
+  struct tm buf;
+#ifdef _WIN32
+  localtime_s(&buf, &t);
+#else
+  localtime_r(&t, &buf);
+#endif
+  // use stringstream + put_time to avoid snprintf size warnings
+  std::ostringstream oss;
+  oss << std::put_time(&buf, "%Y-%m-%d %H:%M:%S") << "."
+      << std::setw(3) << std::setfill('0') << (int)ms.count();
+  return oss.str();
+}
+
+std::string TradeLogger::sanitize(const std::string &s) {
+  std::string r = s;
+  for (auto &c : r) {
+    if (c == ',')
+      c = '_';
+    else if (c == '\n' || c == '\r')
+      c = '|';
+  }
+  return r;
+}
+
+void TradeLogger::writerLoop() {
+  while (true) {
+    std::unique_lock<std::mutex> lk(queue_mutex_);
+    queue_cv_.wait(lk, [this] { return stop_ || !queue_.empty(); });
+
+    // Drain all pending entries under the lock, then release
+    std::queue<LogEntry> batch;
+    std::swap(batch, queue_);
+    lk.unlock();
+
+    // Write batch to disk (outside the lock)
+    while (!batch.empty()) {
+      auto &entry = batch.front();
+      if (entry.is_trade && !records_path_.empty()) {
+        std::ofstream f(records_path_, std::ios::app);
+        f << entry.csv_line;
+      }
+      if (!entry.log_line.empty() && !log_path_.empty()) {
+        std::ofstream f(log_path_, std::ios::app);
+        f << entry.log_line;
+      }
+      // Also print to console (fast enough)
+      if (!entry.log_line.empty()) {
+        std::cout << entry.log_line;
+      }
+      batch.pop();
+    }
+
+    if (stop_)
+      break;
+  }
+}
+
+void TradeLogger::init(const std::string &logsDir,
+                       const std::string &strategyName) {
+  strategy_name_ = strategyName.empty() ? "default" : strategyName;
+
+#ifdef _WIN32
+  _mkdir(logsDir.c_str());
+#else
+  mkdir(logsDir.c_str(), 0755);
+#endif
+
+  auto now = std::chrono::system_clock::now();
+  auto t = std::chrono::system_clock::to_time_t(now);
+  struct tm buf;
+#ifdef _WIN32
+  localtime_s(&buf, &t);
+#else
+  localtime_r(&t, &buf);
+#endif
+  // format date string using ostringstream to avoid buffer overflow warnings
+  std::ostringstream doss;
+  doss << std::put_time(&buf, "%Y-%m-%d");
+  std::string date = doss.str();
+
+  records_path_ = logsDir + "/" + strategy_name_ + "_trades.csv";
+  log_path_ = logsDir + "/" + strategy_name_ + "_" + date + ".log";
+
+  // Write CSV header if file doesn't exist
+  {
+    std::ifstream check(records_path_);
+    if (!check.good()) {
+      std::ofstream f(records_path_, std::ios::app);
+      f << "timestamp,broker,user_id,exchange,exchange_token,trading_symbol,"
+           "position_type,product,transaction_type,order_status,order_id,"
+           "requested_qty,placed_qty,price,duration_ms,message,tag\n";
+    }
+  }
+
+  initialised_ = true;
+
+  // Start background writer thread
+  writer_thread_ = std::thread(&TradeLogger::writerLoop, this);
+
+  log("INFO", "TradeLogger initialized: records=" + records_path_ +
+                  " log=" + log_path_);
+}
+
+void TradeLogger::logTrade(const OrderResult &r) {
+  if (!initialised_)
+    return;
+
+  // Pre-format CSV line and log line on caller thread (fast string ops)
+  std::string ts = timestamp();
+
+  std::string csv =
+      ts + "," + r.broker + "," + r.user_id + "," + r.exchange + "," +
+      std::to_string(r.exchange_token) + "," + sanitize(r.trading_symbol) +
+      "," + r.position_type + "," + r.product + "," + r.transaction_type + "," +
+      r.status + "," + r.order_id + "," + std::to_string(r.requested_qty) +
+      "," + std::to_string(r.placed_qty) + "," + std::to_string(r.price) + "," +
+      std::to_string(r.duration_ms) + "," + sanitize(r.message) + "," + r.tag +
+      "\n";
+
+  std::string logLine =
+      ts + " - " + (r.success ? "INFO" : "ERROR") + " - [TRADE] " + r.status +
+      " | " + r.broker + ":" + r.user_id + " | " + r.exchange + ":" +
+      std::to_string(r.exchange_token) + " " + r.trading_symbol + " | " +
+      r.transaction_type + " " + std::to_string(r.placed_qty) +
+      " | oid=" + r.order_id + " | " + std::to_string(r.duration_ms) + "ms" +
+      (r.message.empty() ? "" : " | " + r.message) + "\n";
+
+  // Push to queue — near-zero latency
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    queue_.push({true, std::move(csv), std::move(logLine)});
+  }
+  queue_cv_.notify_one();
+}
+
+void TradeLogger::log(const std::string &level, const std::string &message) {
+  if (!initialised_)
+    return;
+
+  std::string logLine = timestamp() + " - " + level + " - " + message + "\n";
+
+  {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    queue_.push({false, "", std::move(logLine)});
+  }
+  queue_cv_.notify_one();
+}
+
+void TradeLogger::flush() {
+  if (!initialised_)
+    return;
+  // Push a dummy entry and wait for it to be processed
+  // Simple approach: wait until queue is empty
+  while (true) {
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    if (queue_.empty())
+      break;
+  }
+  // Small sleep to ensure last batch is written
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  Response normalization helpers
+//  Maps varied broker status strings → SUCCESS | FAILED | REJECTED
+// ═════════════════════════════════════════════════════════════════════
+
+std::string OrderExecutor::normalizeStatus(const std::string &rawStatus) {
+  std::string s = toUpper(rawStatus);
+  if (s == "SUCCESS" || s == "COMPLETE" || s == "COMPLETED" || s == "TRADED" ||
+      s == "FILLED" || s == "OPEN" || s == "PUT ORDER REQ RECEIVED")
+    return "SUCCESS";
+  if (s == "REJECTED" || s == "REJECT")
+    return "REJECTED";
+  return "FAILED";
+}
+
+void OrderExecutor::fillResultFromRaw(OrderResult &res) {
+  json &resp = res.raw_response;
+  if (resp.is_null()) {
+    res.success = false;
+    res.status = "FAILED";
+    res.error = "null response from broker";
+    return;
+  }
+
+  // Try to extract order_id from various broker response formats
+  if (res.order_id.empty()) {
+    // AngelOne: data.orderid
+    if (resp.contains("data") && resp["data"].contains("orderid"))
+      res.order_id = resp["data"]["orderid"].get<std::string>();
+    // AliceBlue: [0].orderNumber
+    else if (resp.is_array() && !resp.empty() &&
+             resp[0].contains("orderNumber"))
+      res.order_id = resp[0]["orderNumber"].get<std::string>();
+    // Upstox: data.order_id
+    else if (resp.contains("data") && resp["data"].contains("order_id"))
+      res.order_id = resp["data"]["order_id"].get<std::string>();
+    // Zerodha/Kite: data.order_id (string directly)
+    else if (resp.contains("order_id"))
+      res.order_id = resp["order_id"].get<std::string>();
+    // Fyers: id
+    else if (resp.contains("id"))
+      res.order_id = resp["id"].get<std::string>();
+    // Dhan: orderId
+    else if (resp.contains("orderId"))
+      res.order_id = resp["orderId"].get<std::string>();
+    // Findoc: order_id
+    else if (resp.contains("data") && resp["data"].is_object() &&
+             resp["data"].contains("order_id"))
+      res.order_id = resp["data"]["order_id"].get<std::string>();
+  }
+
+  // Try to extract status from various formats
+  std::string rawStat;
+  if (resp.contains("status") && resp["status"].is_string())
+    rawStat = resp["status"].get<std::string>();
+  else if (resp.contains("data") && resp["data"].contains("status"))
+    rawStat = resp["data"]["status"].get<std::string>();
+  else if (resp.contains("s") && resp["s"].is_string())
+    rawStat = resp["s"].get<std::string>();
+  else if (resp.contains("orderstatus") && resp["orderstatus"].is_string())
+    rawStat = resp["orderstatus"].get<std::string>();
+
+  if (!rawStat.empty()) {
+    res.status = normalizeStatus(rawStat);
+  } else {
+    // If we got an order_id, consider it a success
+    res.status = res.order_id.empty() ? "FAILED" : "SUCCESS";
+  }
+
+  res.success = (res.status == "SUCCESS");
+
+  // Extract error/message from broker response
+  if (resp.contains("message") && resp["message"].is_string()) {
+    std::string msg = resp["message"].get<std::string>();
+    if (res.success)
+      res.message = msg;
+    else
+      res.error = msg;
+  }
+  if (resp.contains("errorMessage") && resp["errorMessage"].is_string())
+    res.error = resp["errorMessage"].get<std::string>();
+  if (resp.contains("emsg") && resp["emsg"].is_string())
+    res.error = resp["emsg"].get<std::string>();
+
+  // Set human-readable message
+  if (res.message.empty()) {
+    if (res.success)
+      res.message = "Order placed: " + res.order_id;
+    else
+      res.message = res.error.empty() ? "Order failed" : res.error;
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
 //  Registration
 // ═════════════════════════════════════════════════════════════════════
 
@@ -446,18 +729,42 @@ bool OrderExecutor::isRegistered(const std::string &userId) const {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-//  Main dispatcher
+//  Logger initialisation
+// ═════════════════════════════════════════════════════════════════════
+
+void OrderExecutor::initLogger(const std::string &logsDir,
+                               const std::string &strategyName) {
+  logger_.init(logsDir, strategyName);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  Main dispatcher — with timing, normalization, and trade logging
 // ═════════════════════════════════════════════════════════════════════
 
 OrderResult OrderExecutor::placeOrder(const std::string &userId,
                                       const UniversalOrder &order) {
+  auto startTime = std::chrono::steady_clock::now();
+
   OrderResult result;
   result.user_id = userId;
 
+  // Fill order context on result
+  result.exchange = order.exchange;
+  result.trading_symbol = order.trading_symbol;
+  result.transaction_type = order.transaction_type;
+  result.product = order.product;
+  result.order_type = order.order_type;
+  result.position_type = order.position_type;
+  result.placed_qty = order.quantity;
+  result.price = order.price;
+  result.tag = order.tag;
+
   auto it = registry_.find(userId);
   if (it == registry_.end()) {
+    result.status = "FAILED";
     result.message = "User [" + userId + "] is not registered.";
-    std::cerr << "[OrderExecutor] " << result.message << std::endl;
+    result.error = result.message;
+    logger_.logTrade(result);
     return result;
   }
 
@@ -496,14 +803,44 @@ OrderResult OrderExecutor::placeOrder(const std::string &userId,
       result = placeOrderUpstox(static_cast<UpstoxBroker *>(info.broker_ptr),
                                 userId, order);
     } else {
+      result.status = "FAILED";
       result.message = "Unknown broker: " + info.broker_name;
-      std::cerr << "[OrderExecutor] " << result.message << std::endl;
+      result.error = result.message;
     }
   } catch (const std::exception &ex) {
     result.success = false;
+    result.status = "FAILED";
     result.message = std::string("Exception: ") + ex.what();
-    std::cerr << "[OrderExecutor] " << result.message << std::endl;
+    result.error = result.message;
   }
+
+  // Normalize response from raw broker JSON
+  fillResultFromRaw(result);
+
+  // Preserve context that dispatchers may not fill
+  result.user_id = userId;
+  result.broker = info.broker_name;
+  if (result.exchange.empty())
+    result.exchange = order.exchange;
+  if (result.trading_symbol.empty())
+    result.trading_symbol = order.trading_symbol;
+  if (result.placed_qty == 0)
+    result.placed_qty = order.quantity;
+  result.transaction_type = order.transaction_type;
+  result.product = order.product;
+  result.order_type = order.order_type;
+  result.position_type = order.position_type;
+  result.price = order.price;
+  result.tag = order.tag;
+
+  // Measure duration
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - startTime)
+                     .count();
+  result.duration_ms = elapsed;
+
+  // Log the trade
+  logger_.logTrade(result);
 
   return result;
 }
@@ -1013,23 +1350,146 @@ std::string InstrumentNormalizer::readFile(const std::string &path) {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-//  InstrumentNormalizer — Master loaders
+//  InstrumentNormalizer — Binary serialization
+//  Format: "INST" (4B) | version (4B) | count (4B)
+//  Per record: token(4B) lot_size(4B) inst_token(4B) tick_size(8B)
+//              then 5 length-prefixed strings
+// ═════════════════════════════════════════════════════════════════════
+
+static void writeStr(std::ofstream &f, const std::string &s) {
+  uint32_t len = (uint32_t)s.size();
+  f.write(reinterpret_cast<const char *>(&len), 4);
+  if (len > 0)
+    f.write(s.data(), len);
+}
+
+static std::string readStr(std::ifstream &f) {
+  uint32_t len = 0;
+  f.read(reinterpret_cast<char *>(&len), 4);
+  if (len == 0 || len > 1000000)
+    return "";
+  std::string s(len, '\0');
+  f.read(&s[0], len);
+  return s;
+}
+
+void InstrumentNormalizer::saveBinary(
+    const std::string &path,
+    const std::unordered_map<int, InstrumentInfo> &data) {
+  std::ofstream f(path, std::ios::binary);
+  if (!f)
+    return;
+
+  // Header
+  const char magic[4] = {'I', 'N', 'S', 'T'};
+  f.write(magic, 4);
+  uint32_t version = 1;
+  f.write(reinterpret_cast<const char *>(&version), 4);
+  uint32_t count = (uint32_t)data.size();
+  f.write(reinterpret_cast<const char *>(&count), 4);
+
+  // Records
+  for (auto &[key, info] : data) {
+    int32_t token = info.token;
+    int32_t lot_size = info.lot_size;
+    int32_t inst_token = info.instrument_token;
+    double tick_size = info.tick_size;
+
+    f.write(reinterpret_cast<const char *>(&token), 4);
+    f.write(reinterpret_cast<const char *>(&lot_size), 4);
+    f.write(reinterpret_cast<const char *>(&inst_token), 4);
+    f.write(reinterpret_cast<const char *>(&tick_size), 8);
+
+    writeStr(f, info.trading_symbol);
+    writeStr(f, info.symbol);
+    writeStr(f, info.instrument_key);
+    writeStr(f, info.fytoken);
+    writeStr(f, info.symbol_ticker);
+  }
+}
+
+bool InstrumentNormalizer::loadBinary(
+    const std::string &path, std::unordered_map<int, InstrumentInfo> &data) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f)
+    return false;
+
+  // Verify magic
+  char magic[4];
+  f.read(magic, 4);
+  if (magic[0] != 'I' || magic[1] != 'N' || magic[2] != 'S' || magic[3] != 'T')
+    return false;
+
+  uint32_t version = 0;
+  f.read(reinterpret_cast<char *>(&version), 4);
+  if (version != 1)
+    return false;
+
+  uint32_t count = 0;
+  f.read(reinterpret_cast<char *>(&count), 4);
+
+  data.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    InstrumentInfo info;
+    int32_t token, lot_size, inst_token;
+    double tick_size;
+
+    f.read(reinterpret_cast<char *>(&token), 4);
+    f.read(reinterpret_cast<char *>(&lot_size), 4);
+    f.read(reinterpret_cast<char *>(&inst_token), 4);
+    f.read(reinterpret_cast<char *>(&tick_size), 8);
+
+    info.token = token;
+    info.lot_size = lot_size;
+    info.instrument_token = inst_token;
+    info.tick_size = tick_size;
+
+    info.trading_symbol = readStr(f);
+    info.symbol = readStr(f);
+    info.instrument_key = readStr(f);
+    info.fytoken = readStr(f);
+    info.symbol_ticker = readStr(f);
+
+    if (!f)
+      return false; // read error
+    data[token] = std::move(info);
+  }
+  return true;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  InstrumentNormalizer — Master loaders (with binary cache)
+//  Flow: .bin exists? → instant load
+//        else: download/read CSV → parse → save .bin for next time
 // ═════════════════════════════════════════════════════════════════════
 
 void InstrumentNormalizer::loadAliceMaster(const std::string &dir, bool force) {
   for (auto &[exchange, url] : ALICE_URLS) {
-    std::string cachePath = dir + "/alice_" + exchange + ".csv";
-    std::string csvData;
+    std::string binPath = dir + "/alice_" + exchange + ".bin";
+    std::string csvPath = dir + "/alice_" + exchange + ".csv";
+    auto &exchMap = masters_["alice"][exchange];
 
-    if (force || !fileExists(cachePath)) {
+    // Try binary cache first (instant load)
+    if (!force && fileExists(binPath)) {
+      if (loadBinary(binPath, exchMap)) {
+        std::cout << "[InstrumentNormalizer] Alice " << exchange << ": "
+                  << exchMap.size() << " instruments loaded from BINARY"
+                  << std::endl;
+        continue;
+      }
+    }
+
+    // Fall back to CSV parse
+    std::string csvData;
+    if (force || !fileExists(csvPath)) {
       std::cout << "[InstrumentNormalizer] Downloading Alice " << exchange
                 << " master..." << std::endl;
       csvData = downloadUrl(url);
-      writeFile(cachePath, csvData);
+      writeFile(csvPath, csvData);
     } else {
-      std::cout << "[InstrumentNormalizer] Loading Alice " << exchange
-                << " from cache..." << std::endl;
-      csvData = readFile(cachePath);
+      std::cout << "[InstrumentNormalizer] Parsing Alice " << exchange
+                << " CSV..." << std::endl;
+      csvData = readFile(csvPath);
     }
 
     auto rows = parseCSV(csvData);
@@ -1049,7 +1509,6 @@ void InstrumentNormalizer::loadAliceMaster(const std::string &dir, bool force) {
       continue;
     }
 
-    auto &exchMap = masters_["alice"][exchange];
     for (size_t r = 1; r < rows.size(); ++r) {
       auto &row = rows[r];
       if (row.size() <= (size_t)std::max({iToken, iTradSym, iSymbol, iLotSize}))
@@ -1061,7 +1520,6 @@ void InstrumentNormalizer::loadAliceMaster(const std::string &dir, bool force) {
       } catch (...) {
         continue;
       }
-
       info.trading_symbol = row[iTradSym];
       if (iSymbol >= 0 && (size_t)iSymbol < row.size())
         info.symbol = row[iSymbol];
@@ -1077,15 +1535,49 @@ void InstrumentNormalizer::loadAliceMaster(const std::string &dir, bool force) {
         } catch (...) {
         }
       }
-
       exchMap[info.token] = std::move(info);
     }
+
+    // Save binary cache for next time
+    saveBinary(binPath, exchMap);
     std::cout << "[InstrumentNormalizer] Alice " << exchange << ": "
-              << exchMap.size() << " instruments loaded" << std::endl;
+              << exchMap.size() << " instruments loaded, BINARY cached"
+              << std::endl;
   }
 }
 
 void InstrumentNormalizer::loadAngelMaster(const std::string &dir, bool force) {
+  // Angel has multiple exchanges in one JSON, so we need per-exchange bins
+  std::vector<std::string> exchanges = {"NSE", "BSE", "NFO", "BFO", "MCX"};
+
+  // Try loading all from binary first
+  if (!force) {
+    bool allLoaded = true;
+    for (auto &exch : exchanges) {
+      std::string binPath = dir + "/angel_" + exch + ".bin";
+      if (fileExists(binPath)) {
+        auto &exchMap = masters_["angel"][exch];
+        if (!loadBinary(binPath, exchMap)) {
+          allLoaded = false;
+          break;
+        }
+      } else {
+        allLoaded = false;
+        break;
+      }
+    }
+    if (allLoaded) {
+      for (auto &[exch, m] : masters_["angel"]) {
+        std::cout << "[InstrumentNormalizer] Angel " << exch << ": " << m.size()
+                  << " instruments loaded from BINARY" << std::endl;
+      }
+      return;
+    }
+    // Clear partial loads
+    masters_["angel"].clear();
+  }
+
+  // Fall back to JSON parse
   std::string cachePath = dir + "/angel.json";
   std::string jsonData;
 
@@ -1095,8 +1587,7 @@ void InstrumentNormalizer::loadAngelMaster(const std::string &dir, bool force) {
     jsonData = downloadUrl(ANGEL_URL);
     writeFile(cachePath, jsonData);
   } else {
-    std::cout << "[InstrumentNormalizer] Loading Angel from cache..."
-              << std::endl;
+    std::cout << "[InstrumentNormalizer] Parsing Angel JSON..." << std::endl;
     jsonData = readFile(cachePath);
   }
 
@@ -1127,9 +1618,11 @@ void InstrumentNormalizer::loadAngelMaster(const std::string &dir, bool force) {
       masters_["angel"][exchSeg][info.token] = std::move(info);
     }
 
+    // Save per-exchange binary caches
     for (auto &[exch, m] : masters_["angel"]) {
+      saveBinary(dir + "/angel_" + exch + ".bin", m);
       std::cout << "[InstrumentNormalizer] Angel " << exch << ": " << m.size()
-                << " instruments loaded" << std::endl;
+                << " instruments loaded, BINARY cached" << std::endl;
     }
   } catch (const std::exception &e) {
     std::cerr << "[InstrumentNormalizer] Angel parse error: " << e.what()
@@ -1139,6 +1632,36 @@ void InstrumentNormalizer::loadAngelMaster(const std::string &dir, bool force) {
 
 void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
                                              bool force) {
+  // Zerodha has multiple exchanges in one CSV, per-exchange bins
+  std::vector<std::string> exchanges = {"NSE", "BSE", "NFO", "BFO", "MCX"};
+
+  // Try binary first
+  if (!force) {
+    bool allLoaded = true;
+    for (auto &exch : exchanges) {
+      std::string binPath = dir + "/zerodha_" + exch + ".bin";
+      if (fileExists(binPath)) {
+        auto &exchMap = masters_["zerodha"][exch];
+        if (!loadBinary(binPath, exchMap)) {
+          allLoaded = false;
+          break;
+        }
+      } else {
+        allLoaded = false;
+        break;
+      }
+    }
+    if (allLoaded) {
+      for (auto &[exch, m] : masters_["zerodha"]) {
+        std::cout << "[InstrumentNormalizer] Zerodha " << exch << ": "
+                  << m.size() << " instruments loaded from BINARY" << std::endl;
+      }
+      return;
+    }
+    masters_["zerodha"].clear();
+  }
+
+  // Fall back to CSV
   std::string cachePath = dir + "/zerodha.csv";
   std::string csvData;
 
@@ -1148,8 +1671,7 @@ void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
     csvData = downloadUrl(ZERODHA_URL);
     writeFile(cachePath, csvData);
   } else {
-    std::cout << "[InstrumentNormalizer] Loading Zerodha from cache..."
-              << std::endl;
+    std::cout << "[InstrumentNormalizer] Parsing Zerodha CSV..." << std::endl;
     csvData = readFile(cachePath);
   }
 
@@ -1175,7 +1697,6 @@ void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
     if (row.size() <= (size_t)std::max({iExchToken, iTradSym, iExchange}))
       continue;
 
-    // Filter to relevant segments
     if (iSegment >= 0 && (size_t)iSegment < row.size()) {
       std::string seg = row[iSegment];
       if (seg.find("NFO") == std::string::npos &&
@@ -1191,7 +1712,6 @@ void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
       continue;
     }
     info.trading_symbol = row[iTradSym];
-
     if (iInstToken >= 0 && (size_t)iInstToken < row.size()) {
       try {
         info.instrument_token = std::stoi(row[iInstToken]);
@@ -1217,14 +1737,46 @@ void InstrumentNormalizer::loadZerodhaMaster(const std::string &dir,
     masters_["zerodha"][exch][info.token] = std::move(info);
   }
 
+  // Save per-exchange binary caches
   for (auto &[exch, m] : masters_["zerodha"]) {
+    saveBinary(dir + "/zerodha_" + exch + ".bin", m);
     std::cout << "[InstrumentNormalizer] Zerodha " << exch << ": " << m.size()
-              << " instruments loaded" << std::endl;
+              << " instruments loaded, BINARY cached" << std::endl;
   }
 }
 
 void InstrumentNormalizer::loadUpstoxMaster(const std::string &dir,
                                             bool force) {
+  // Upstox exchanges: NSE_EQ, BSE_EQ, NSE_FO, BSE_FO, MCX_FO, etc.
+  std::vector<std::string> exchanges = {"NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO",
+                                        "MCX_FO"};
+
+  // Try binary first
+  if (!force) {
+    bool anyLoaded = false;
+    bool allBinExist = true;
+    for (auto &exch : exchanges) {
+      std::string binPath = dir + "/upstox_" + exch + ".bin";
+      if (fileExists(binPath)) {
+        auto &exchMap = masters_["upstox"][exch];
+        if (loadBinary(binPath, exchMap))
+          anyLoaded = true;
+      } else {
+        allBinExist = false;
+      }
+    }
+    if (anyLoaded && allBinExist) {
+      for (auto &[exch, m] : masters_["upstox"]) {
+        std::cout << "[InstrumentNormalizer] Upstox " << exch << ": "
+                  << m.size() << " instruments loaded from BINARY" << std::endl;
+      }
+      return;
+    }
+    if (!allBinExist)
+      masters_["upstox"].clear();
+  }
+
+  // Fall back to CSV
   std::string cachePath = dir + "/upstox.csv";
   std::string csvData;
 
@@ -1234,8 +1786,7 @@ void InstrumentNormalizer::loadUpstoxMaster(const std::string &dir,
     csvData = downloadUrl(UPSTOX_URL);
     writeFile(cachePath, csvData);
   } else {
-    std::cout << "[InstrumentNormalizer] Loading Upstox from cache..."
-              << std::endl;
+    std::cout << "[InstrumentNormalizer] Parsing Upstox CSV..." << std::endl;
     csvData = readFile(cachePath);
   }
 
@@ -1266,7 +1817,6 @@ void InstrumentNormalizer::loadUpstoxMaster(const std::string &dir,
     } catch (...) {
       continue;
     }
-
     if (iTradSym >= 0 && (size_t)iTradSym < row.size())
       info.trading_symbol = row[iTradSym];
     if (iInstKey >= 0 && (size_t)iInstKey < row.size())
@@ -1286,22 +1836,20 @@ void InstrumentNormalizer::loadUpstoxMaster(const std::string &dir,
     if (iName >= 0 && (size_t)iName < row.size())
       info.symbol = row[iName];
 
-    // Upstox uses exchange names like NSE_FO, BSE_EQ, etc.
     std::string exch = row[iExchange];
     masters_["upstox"][exch][info.token] = std::move(info);
   }
 
+  // Save per-exchange binary caches
   for (auto &[exch, m] : masters_["upstox"]) {
+    saveBinary(dir + "/upstox_" + exch + ".bin", m);
     std::cout << "[InstrumentNormalizer] Upstox " << exch << ": " << m.size()
-              << " instruments loaded" << std::endl;
+              << " instruments loaded, BINARY cached" << std::endl;
   }
 }
 
 void InstrumentNormalizer::loadFyersMaster(const std::string &dir, bool force) {
-  // Fyers CSVs have no header row — column names from Python reference:
-  // Fytoken,SymbolDetails,ExchangeInstrumentType,MinimumLotSize,TickSize,
-  // ISIN,TradingSession,LastUpdateDate,Expirydate,SymbolTicker,Exchange,
-  // Segment,ScripCode,UnderlyingSymbol,...
+  // Fyers CSVs have no header row — column positions from Python reference
   const int COL_FYTOKEN = 0;
   const int COL_LOTSZ = 3;
   const int COL_TICKSZ = 4;
@@ -1310,23 +1858,34 @@ void InstrumentNormalizer::loadFyersMaster(const std::string &dir, bool force) {
   const int COL_UNDERLYING = 13;
 
   for (auto &[exchange, url] : FYERS_URLS) {
-    std::string cachePath = dir + "/fyers_" + exchange + ".csv";
-    std::string csvData;
+    std::string binPath = dir + "/fyers_" + exchange + ".bin";
+    std::string csvPath = dir + "/fyers_" + exchange + ".csv";
+    auto &exchMap = masters_["fyers"][exchange];
 
-    if (force || !fileExists(cachePath)) {
+    // Try binary cache first
+    if (!force && fileExists(binPath)) {
+      if (loadBinary(binPath, exchMap)) {
+        std::cout << "[InstrumentNormalizer] Fyers " << exchange << ": "
+                  << exchMap.size() << " instruments loaded from BINARY"
+                  << std::endl;
+        continue;
+      }
+    }
+
+    // Fall back to CSV
+    std::string csvData;
+    if (force || !fileExists(csvPath)) {
       std::cout << "[InstrumentNormalizer] Downloading Fyers " << exchange
                 << " master..." << std::endl;
       csvData = downloadUrl(url);
-      writeFile(cachePath, csvData);
+      writeFile(csvPath, csvData);
     } else {
-      std::cout << "[InstrumentNormalizer] Loading Fyers " << exchange
-                << " from cache..." << std::endl;
-      csvData = readFile(cachePath);
+      std::cout << "[InstrumentNormalizer] Parsing Fyers " << exchange
+                << " CSV..." << std::endl;
+      csvData = readFile(csvPath);
     }
 
     auto rows = parseCSV(csvData);
-    auto &exchMap = masters_["fyers"][exchange];
-
     for (auto &row : rows) {
       if (row.size() <= (size_t)COL_UNDERLYING)
         continue;
@@ -1337,7 +1896,6 @@ void InstrumentNormalizer::loadFyersMaster(const std::string &dir, bool force) {
       } catch (...) {
         continue;
       }
-
       info.fytoken = row[COL_FYTOKEN];
       info.symbol_ticker = row[COL_SYMTICKER];
       info.symbol = row[COL_UNDERLYING];
@@ -1349,11 +1907,14 @@ void InstrumentNormalizer::loadFyersMaster(const std::string &dir, bool force) {
         info.tick_size = std::stod(row[COL_TICKSZ]);
       } catch (...) {
       }
-
       exchMap[info.token] = std::move(info);
     }
+
+    // Save binary cache
+    saveBinary(binPath, exchMap);
     std::cout << "[InstrumentNormalizer] Fyers " << exchange << ": "
-              << exchMap.size() << " instruments loaded" << std::endl;
+              << exchMap.size() << " instruments loaded, BINARY cached"
+              << std::endl;
   }
 }
 
@@ -1524,16 +2085,19 @@ OrderResult OrderExecutor::placeOrder(
   order.price = price;
   order.tag = tag;
 
-  std::cout << "[OrderExecutor] Simplified placeOrder: "
-            << "user=" << userId << " broker=" << info.broker_name
-            << " exch=" << order.exchange << " token=" << exchange_token
-            << " symbol=" << tradingSymbol << " side=" << order.transaction_type
-            << " qty=" << order.quantity << " (lots=" << quantity
-            << " x lotSize=" << lotSize << ")"
-            << " product=" << order.product << " orderType=" << order.order_type
-            << " posType=" << order.position_type << std::endl;
+  logger_.log(
+      "INFO",
+      "[placeOrder] user=" + userId + " broker=" + info.broker_name + " exch=" +
+          order.exchange + " token=" + std::to_string(exchange_token) +
+          " symbol=" + tradingSymbol + " side=" + order.transaction_type +
+          " qty=" + std::to_string(order.quantity) + " (lots=" +
+          std::to_string(quantity) + " x lot=" + std::to_string(lotSize) + ")" +
+          " product=" + order.product + " orderType=" + order.order_type);
 
-  return placeOrder(userId, order);
+  OrderResult res = placeOrder(userId, order);
+  res.requested_qty = quantity;        // lots user asked for
+  res.exchange_token = exchange_token; // preserve original token
+  return res;
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1624,61 +2188,88 @@ int main() {
 
   // ... create other broker instances as needed
 
-  AngelOneBroker angel("FZLDMjMp", "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkoyNTI1MDUiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pFekxDSnpiM1Z5WTJVaU9pSXpJaXdpWkdWMmFXTmxYMmxrSWpvaVkyRTRaakJoTkdJdFl6QmtPQzB6T0RZNUxUZzRNVFl0T0RBNU1EQTJaRFZpTnpZMklpd2lhMmxrSWpvaWRISmhaR1ZmYTJWNVgzWXlJaXdpYjIxdVpXMWhibUZuWlhKcFpDSTZNVE1zSW5CeWIyUjFZM1J6SWpwN0ltUmxiV0YwSWpwN0luTjBZWFIxY3lJNkltRmpkR2wyWlNKOUxDSnRaaUk2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlgwc0ltbHpjeUk2SW5SeVlXUmxYMnh2WjJsdVgzTmxjblpwWTJVaUxDSnpkV0lpT2lKS01qVXlOVEExSWl3aVpYaHdJam94TnpjeU5ETTJNakUzTENKdVltWWlPakUzTnpJek5EazJNemNzSW1saGRDSTZNVGMzTWpNME9UWXpOeXdpYW5ScElqb2lNbUpsTVRsbFpqWXROVEkxT1MwME5UQXpMVGxoTVRFdFkyWmhPREEzTXpRelpEY3hJaXdpVkc5clpXNGlPaUlpZlEuZGtqQWZlOHVCRXhOeDRNN2FDNTg0X1FSV1h3SkhnQWwwNzhXNTlLa1FVTldDdm0zdy0xMHdOZW1IMEtpRjFHeklES3hPX0hTa1lCN3U5QkQ4UmZORFZleWZSWHRYQnBnNkpJRWx0NExFbHFXX3JFQ1ZjSVI0NnNJSGhqM3pPVUM0aGZWRVdjN3hkakVmVW53bVZiUEdOUnlsMkkzeDJ4VjRJVnlmaVVyVkRBIiwiQVBJLUtFWSI6IkZaTERNak1wIiwiWC1PTEQtQVBJLUtFWSI6dHJ1ZSwiaWF0IjoxNzcyMzQ5ODE3LCJleHAiOjE3NzIzODk4MDB9.8_NaN5qtNu5Iui24k2EqCeU9UjjpLmynPPrHe2YwAYkp9nAktIG-2F6ZipaNbiv62fdQhuBD9rqLyeQpWbXpsg", "J252505");
-  AliceBlueBroker alice("eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyam9lOFVScGxZU3FTcDB3RDNVemVBQkgxYkpmOE4wSDRDMGVVSWhXUVAwIn0.eyJleHAiOjE3Nzc1NDEzOTgsImlhdCI6MTc3MjM1NzQ4MywianRpIjoib25ydHJ0OjZlMjJmNDMzLWJkOWEtODgwMC0yYjgxLTc5MTJjMDE4MWJmNCIsImlzcyI6Imh0dHBzOi8vaWRhYXMuYWxpY2VibHVlb25saW5lLmNvbS9pZGFhcy9yZWFsbXMvQWxpY2VCbHVlIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6IjVlZjY2YmZiLTRjNWQtNDM5OS1iNmM2LTdjODViNjE0NjU2ZiIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFsaWNlLWtiIiwic2lkIjoiN2JjNjQ2MzQtMDRhNS1lYjFmLTc3MzItNjlhOWQ3NzM3M2MxIiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMiIsImh0dHA6Ly9sb2NhbGhvc3Q6NTA1MCIsImh0dHA6Ly9sb2NhbGhvc3Q6OTk0MyIsImh0dHA6Ly9sb2NhbGhvc3Q6OTAwMCJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLWFsaWNlYmx1ZWtiIiwidW1hX2F1dGhvcml6YXRpb24iXX0sInJlc291cmNlX2FjY2VzcyI6eyJhbGljZS1rYiI6eyJyb2xlcyI6WyJHVUVTVF9VU0VSIiwiQUNUSVZFX1VTRVIiXX0sImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoiZW1haWwgcHJvZmlsZSBvcGVuaWQiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwidWNjIjoiMTgwNTY1NiIsImNsaWVudFJvbGUiOlsiR1VFU1RfVVNFUiIsIkFDVElWRV9VU0VSIl0sIm5hbWUiOiJKIFNhaSBLcmlzaG5hIiwicHJlZmVycmVkX3VzZXJuYW1lIjoiMTgwNTY1NiIsImdpdmVuX25hbWUiOiJKIFNhaSBLcmlzaG5hIn0.Mx1CGE_nnQualiAClgYKfq_4n4FTEdC6da5ojCzIA2Agua4QTX4iIqRimg04fhnnwyHWqFSFgJTfl4ZCkI7fj9Tc4zeDshPOPPkCezGoy0yMDjbwhL8GhWP6TUhrOCOfsrAVLb8IADffFdpMnAVzJjjsLkVBXmBhSriCcQuc7mS0MRLwZrAtbt2FbFBhnIq_nOYBK0ATPPoMutTynXK5l_M-q-0OHey4sNxf7K75jQKQmLCeF7n8X0nTucuqkjoqdsrwBWDkJtaYiawNkcq1pEjUwKkBBj_6kkS6mtYQ_6z8GoBdc02y1iggxUGOzjg3ahfqJabPYlX2UzZMWS8qnQ");
-  KiteConnect     kite("h63xizkk69d4im7w", "6PlphqfUoQpvTgGd1h2DsGGKFG0O9x5m");
-
+  AngelOneBroker angel(
+      "FZLDMjMp",
+      "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkoyNTI1MDUiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pFekxDSnpiM1Z5WTJVaU9pSXpJaXdpWkdWMmFXTmxYMmxrSWpvaVkyRTRaakJoTkdJdFl6QmtPQzB6T0RZNUxUZzRNVFl0T0RBNU1EQTJaRFZpTnpZMklpd2lhMmxrSWpvaWRISmhaR1ZmYTJWNVgzWXlJaXdpYjIxdVpXMWhibUZuWlhKcFpDSTZNVE1zSW5CeWIyUjFZM1J6SWpwN0ltUmxiV0YwSWpwN0luTjBZWFIxY3lJNkltRmpkR2wyWlNKOUxDSnRaaUk2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlgwc0ltbHpjeUk2SW5SeVlXUmxYMnh2WjJsdVgzTmxjblpwWTJVaUxDSnpkV0lpT2lKS01qVXlOVEExSWl3aVpYaHdJam94TnpjeU5UQTRNamd3TENKdVltWWlPakUzTnpJME1qRTNNREFzSW1saGRDSTZNVGMzTWpReU1UY3dNQ3dpYW5ScElqb2lZelJtTVdZd09UY3RNVEl4TWkwME5tWmhMV0l6WXpVdFpqa3laV00wTlRZNU1EbGhJaXdpVkc5clpXNGlPaUlpZlEudl9CaGRwbk9fQlkwU3FJUko1RjJaZ1k3YloyTy1pcjBCbjRaZWJLcnRGQXJPNEFtZVNHelZnOTFYT3VpY1NJd0MyeFNCR0ZBM0h0c0dxOEJsU0ZPZHN0VnAzYmJUVVJUN2ZoVTNJSVpPWFp0YXVYcVpHS2dhdDI0SVhOVnVYeWJZb3ZMbENSak40RWZEby1SZlZjSzVkZHJ2cC1leExobDZ3N19NaFAyTE0wIiwiQVBJLUtFWSI6IkZaTERNak1wIiwiWC1PTEQtQVBJLUtFWSI6dHJ1ZSwiaWF0IjoxNzcyNDIxODgwLCJleHAiOjE3NzI0NzYyMDB9.2EPWAm1X7RlbsGdm2hAox_mcn5vA058AtbUTRpZU3yflJWLpGDkxT3Ae9p2RnqZ4yCv7am4E92bBb_iwdl69hw",
+      "J252505");
+  AliceBlueBroker alice(
+      "eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICIyam9lOFVScGxZU3FTcDB3RDNVemVBQkgxYkpmOE4wSDRDMGVVSWhXUVAwIn0.eyJleHAiOjE3Nzc2MDU5MDgsImlhdCI6MTc3MjQyMTkwOCwianRpIjoib25ydHJvOjZjNDkyMjM4LWE5NGEtOWZmNC05ZmQxLWJlYWI2Yzk1ZjhkMyIsImlzcyI6Imh0dHBzOi8vaWRhYXMuYWxpY2VibHVlb25saW5lLmNvbS9pZGFhcy9yZWFsbXMvQWxpY2VCbHVlIiwiYXVkIjoiYWNjb3VudCIsInN1YiI6IjVlZjY2YmZiLTRjNWQtNDM5OS1iNmM2LTdjODViNjE0NjU2ZiIsInR5cCI6IkJlYXJlciIsImF6cCI6ImFsaWNlLWtiIiwic2lkIjoiZTU3YTVjM2EtZDM5Ni00NGJiLTAyNDYtZTZmZjU0ZDE1ZmQ3IiwiYWxsb3dlZC1vcmlnaW5zIjpbImh0dHA6Ly9sb2NhbGhvc3Q6MzAwMiIsImh0dHA6Ly9sb2NhbGhvc3Q6NTA1MCIsImh0dHA6Ly9sb2NhbGhvc3Q6OTk0MyIsImh0dHA6Ly9sb2NhbGhvc3Q6OTAwMCJdLCJyZWFsbV9hY2Nlc3MiOnsicm9sZXMiOlsib2ZmbGluZV9hY2Nlc3MiLCJkZWZhdWx0LXJvbGVzLWFsaWNlYmx1ZWtiIiwidW1hX2F1dGhvcml6YXRpb24iXX0sInJlc291cmNlX2FjY2VzcyI6eyJhbGljZS1rYiI6eyJyb2xlcyI6WyJHVUVTVF9VU0VSIiwiQUNUSVZFX1VTRVIiXX0sImFjY291bnQiOnsicm9sZXMiOlsibWFuYWdlLWFjY291bnQiLCJtYW5hZ2UtYWNjb3VudC1saW5rcyIsInZpZXctcHJvZmlsZSJdfX0sInNjb3BlIjoiZW1haWwgcHJvZmlsZSBvcGVuaWQiLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwidWNjIjoiMTgwNTY1NiIsImNsaWVudFJvbGUiOlsiR1VFU1RfVVNFUiIsIkFDVElWRV9VU0VSIl0sIm5hbWUiOiJKIFNhaSBLcmlzaG5hIiwicHJlZmVycmVkX3VzZXJuYW1lIjoiMTgwNTY1NiIsImdpdmVuX25hbWUiOiJKIFNhaSBLcmlzaG5hIn0.gZazJbx5fRf4wpFmkbKd_Um6sEqWXJNa0omBjJnK8qJH9d1FmacTdD_0BQYDg5HK4PKdFIT5cbdME8FBY7E85FFaKYoiEOGkAd-odFNMyM_DjwbmzDXqcWkzbvI-PFGqKmXSxvPuDdKJKs6HEoyLg_Lxq4PnCN8zSCBqhTYre1vmB8LBbuIKQm4hCB6TK4g7LUjxDO36EFgw7KJK8QdEolhfBOd_kFJ-9_hQ3TH1ZGkjDth-qv6zKmsWH35qDcVDbqLxxE21vhW5tDMfhHO0JmBD_sV8WForepJmCnsEhI_1HxF82yu49smTO6wLmnpAyzgDTBskv_u4fu8D_ERVzQ");
+  KiteConnect kite("h63xizkk69d4im7w", "hNUcnxCa7nI6NfXrYBXUlV8tB3XEVVP0");
+  FyersBroker fyers("3OIFLCQM7C-100", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiZDoxIiwiZDoyIiwieDowIiwieDoxIiwieDoyIl0sImF0X2hhc2giOiJnQUFBQUFCcHBRTThwbDEwS3Q3MTBEX2lqeUh4Z0g1blVwNkVlSDhZdFRtQWRmdFhRcUdmaTNTOXpWMU5yQm9pNFRQTUFpZndnUkFIbWtHekxUclNfQ1hEV2lHbkRMRF9CT1RWSTZpaWI1SE4yYXptbGpvaF9icz0iLCJkaXNwbGF5X25hbWUiOiIiLCJvbXMiOiJLMSIsImhzbV9rZXkiOiJiMGZkN2M4MzczNGFiODE4NWI2YzMyNDU3NDgwYmYyYzNlOWRkNmZhM2VhZTY5YTAxZjg3ZGY1YyIsImlzRGRwaUVuYWJsZWQiOiJOIiwiaXNNdGZFbmFibGVkIjoiTiIsImZ5X2lkIjoiWUowNjc0NSIsImFwcFR5cGUiOjEwMCwiZXhwIjoxNzcyNDk3ODAwLCJpYXQiOjE3NzI0MjE5NDgsImlzcyI6ImFwaS5meWVycy5pbiIsIm5iZiI6MTc3MjQyMTk0OCwic3ViIjoiYWNjZXNzX3Rva2VuIn0.Ibk_OgrgfLqtbwkCNvTsn2DiYqaZHbCZGHwQE5ccjFc");; // No auth needed for order placement in this example
+  MotilalOswalBroker motilal("lQDa81JYve1EPWMm", "EMUM503065", "df1641167f4141909102e1c5d5b1a706_M");
+  UpstoxBroker upstock("eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TUFVUTkiLCJqdGkiOiI2OWE1MDJmODY4YjRlNTFmZGEwNjNkNzkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzcyNDIxODgwLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NzI0ODg4MDB9.nm0T-vUtqM_XPpfM78vS--DZaZOwCJ1fWZv49-YSzDI");
+  DhanBroker dhan("1109097409", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzcyNTA4MzQ0LCJhcHBfaWQiOiIxMzIzMTYzMSIsImlhdCI6MTc3MjQyMTk0NCwidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiaHR0cHM6Ly93d3cuZ29vZ2xlLmNvbSIsImRoYW5DbGllbnRJZCI6IjExMDkwOTc0MDkifQ.qsmvD4tZMUY845w9EzXTlgbbqlEmCiA8xZ5Uxa3Ct7m5wt618yHb8954FwgMkPT3gIn1bl__rB6Bd5nTkz07rA");
   // ... create other broker instances as needed
 
   // 2. Create the universal executor
   OrderExecutor executor;
 
-  // 3. Register users → brokers
+  // 3. Initialise trade logger (async — won't slow down orders)
+  executor.initLogger("./logs", "my_strategy");
+
+  // 4. Register users → brokers
   executor.registerBroker("J252505", "angelone", &angel);
   executor.registerBroker("1805656", "aliceblue", &alice);
   executor.registerBroker("ILR269", "kiteconnect", &kite);
-
-  // 4. Load instrument masters (downloads & caches CSV/JSON files)
+  executor.registerBroker("YJ06745", "fyers", &fyers);
+  executor.registerBroker("EMUM503065", "motilal", &motilal);
+  executor.registerBroker("4MAUQ9", "upstox", &upstock);
+  executor.registerBroker("1109097409", "dhan", &dhan);
+  // 5. Load instrument masters (downloads & caches CSV/JSON files)
   executor.loadMasters("./masters");
 
-  // 5. Place order with simplified API — just 8 args!
-  //    exchange, token, side, qty(lots), product, orderType, positionType
+  // 6. Place order with simplified API — just 8 args!
+  //    All response normalization + CSV logging happens automatically.
   // OrderResult r1 =
-  //     executor.placeOrder("J252505", // userId
-  //                         "NFO",     // exchange
-  //                         35229,     // exchange_token
-  //                         "BUY",     // transaction_type
-  //                         1, // quantity (in lots, auto-multiplied by
-  //                         lot_size) "MIS",    // product (CNC or MIS)
-  //                         "MARKET", // order_type (MARKET or LIMIT)
-  //                         "OPEN"    // position_type (OPEN or CLOSE)
+  //     executor.placeOrder("J252505",  // userId
+  //                         "NFO",      // exchange
+  //                         35229,      // exchange_token
+  //                         "BUY",      // transaction_type
+  //                         1,          // quantity (lots, auto * lot_size)
+  //                         "MIS",      // product (CNC or MIS)
+  //                         "MARKET",   // order_type (MARKET or LIMIT)
+  //                         "OPEN"      // position_type (OPEN or CLOSE)
   //     );
-  // std::cout << "Angel => " << r1.message << std::endl;
+  //
+  // Normalized result fields:
+  //   r1.status      → "SUCCESS" | "FAILED" | "REJECTED"
+  //   r1.order_id    → "241030000123456"
+  //   r1.message     → "Order placed: 241030000123456"
+  //   r1.duration_ms → 234
+  //   r1.placed_qty  → 75  (1 lot * 75 lot_size)
 
-  // Define users with per-user quantities
+  // 7. Place for ALL users in parallel — one call!
   std::vector<UserOrder> users = {
       {"J252505", 1}, // 1 lot for Angel user
       {"1805656", 2}, // 2 lots for Alice user
       {"ILR269", 1},  // 1 lot for Zerodha user
+      {"YJ06745", 1}, // 1 lot for Fyers user
+      {"EMUM503065", 1}, // 1 lot for Motilal Oswal user
+      {"4MAUQ9", 1},  // 1 lot for Upstox user
+      {"1109097409", 1}, // 1 lot for Dhan user
   };
 
-  // Place for ALL users in parallel — one call!
   std::vector<OrderResult> results =
-      executor.placeOrderParallel(users, // list of {userId, qty}
-                                  "NFO", // exchange
-                                  35229, // exchange_token
-                                  "BUY", // transaction_type
-                                  1, // default_quantity (for users with qty=0)
+      executor.placeOrderParallel(users,    // list of {userId, qty}
+                                  "NFO",    // exchange
+                                  35229,    // exchange_token
+                                  "BUY",    // transaction_type
+                                  1,        // default_quantity
                                   "MIS",    // product
                                   "MARKET", // order_type
                                   "OPEN"    // position_type
       );
 
-  // Check results
+  // 8. Check normalised results
   for (auto &r : results) {
-    std::cout << r.user_id << " => " << (r.success ? "OK" : "FAIL") << " "
-              << r.message << std::endl;
+    std::cout << r.user_id << " [" << r.broker << "] => " << r.status
+              << " | oid=" << r.order_id << " | qty=" << r.placed_qty << " | "
+              << r.duration_ms << "ms"
+              << " | " << r.message << std::endl;
   }
+
+  // 9. Flush logger (ensures all CSV records written before exit)
+  executor.getLogger().flush();
 
   curl_global_cleanup();
   return 0;

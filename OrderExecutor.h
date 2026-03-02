@@ -26,10 +26,15 @@
 
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -141,12 +146,22 @@ private:
       std::unordered_map<std::string, std::unordered_map<int, InstrumentInfo>>>
       masters_;
 
-  // Load individual broker masters
+  // Load individual broker masters (CSV/JSON → binary cache)
   void loadAliceMaster(const std::string &dir, bool force);
   void loadAngelMaster(const std::string &dir, bool force);
   void loadZerodhaMaster(const std::string &dir, bool force);
   void loadUpstoxMaster(const std::string &dir, bool force);
   void loadFyersMaster(const std::string &dir, bool force);
+
+  // Binary serialization for instant loading
+  // Format: [magic 4B][version 4B][count 4B] then per-record:
+  //   token(4B) lot_size(4B) inst_token(4B) tick_size(8B)
+  //   then 5 length-prefixed strings (trading_symbol, symbol,
+  //   instrument_key, fytoken, symbol_ticker)
+  void saveBinary(const std::string &path,
+                  const std::unordered_map<int, InstrumentInfo> &data);
+  bool loadBinary(const std::string &path,
+                  std::unordered_map<int, InstrumentInfo> &data);
 
   // Helpers
   static std::string downloadUrl(const std::string &url);
@@ -169,16 +184,100 @@ struct UserOrder {
 };
 
 // ─────────────────────────────────────────────────────────────────────
-//  OrderResult — standardised response from any broker
+//  OrderResult — normalised response from any broker
 // ─────────────────────────────────────────────────────────────────────
 
 struct OrderResult {
+  // Core fields
   bool success = false;
+  std::string status = "FAILED"; // SUCCESS | FAILED | REJECTED
   std::string order_id = "";
   std::string broker = "";
   std::string user_id = "";
   std::string message = "";
-  json raw_response; // full broker JSON for debugging
+  std::string error = "";
+
+  // Order context (filled by simplified placeOrder)
+  std::string exchange = "";
+  int exchange_token = 0;
+  std::string trading_symbol = "";
+  std::string transaction_type = "";
+  std::string product = "";
+  std::string order_type = "";
+  std::string position_type = "";
+  int placed_qty = 0;    // actual qty sent to broker
+  int requested_qty = 0; // qty user asked for (lots)
+  double price = 0.0;
+  std::string tag = "";
+
+  // Timing
+  long long duration_ms = 0; // time taken to place order
+
+  // Raw broker response
+  json raw_response;
+};
+
+// ─────────────────────────────────────────────────────────────────────
+//  TradeLogger — ASYNC CSV trade records + file logging
+//  logTrade() and log() push to an internal queue (near-zero latency).
+//  A background daemon thread drains the queue and writes to disk.
+//  This ensures order execution is NEVER blocked by file I/O.
+// ─────────────────────────────────────────────────────────────────────
+
+class TradeLogger {
+public:
+  TradeLogger();
+  ~TradeLogger();
+
+  // Non-copyable, non-movable (owns a thread)
+  TradeLogger(const TradeLogger &) = delete;
+  TradeLogger &operator=(const TradeLogger &) = delete;
+
+  /**
+   * Initialise the logger.
+   * @param logsDir       Directory for log files and CSV records
+   * @param strategyName  Optional strategy name (used in file naming)
+   */
+  void init(const std::string &logsDir, const std::string &strategyName = "");
+
+  /** Log a completed order result — NON-BLOCKING (pushes to queue). */
+  void logTrade(const OrderResult &r);
+
+  /** Write an info/warning/error log line — NON-BLOCKING. */
+  void log(const std::string &level, const std::string &message);
+
+  /** Flush all pending writes (blocks until queue is empty). */
+  void flush();
+
+  /** Get path to the CSV records file. */
+  std::string getRecordsPath() const { return records_path_; }
+
+  /** Get path to the log file. */
+  std::string getLogPath() const { return log_path_; }
+
+private:
+  // Queue entry types
+  struct LogEntry {
+    bool is_trade = false; // true = CSV trade record
+    std::string csv_line;  // pre-formatted CSV line
+    std::string log_line;  // pre-formatted log line
+  };
+
+  std::string records_path_;
+  std::string log_path_;
+  std::string strategy_name_;
+  bool initialised_ = false;
+
+  // Async queue + background writer
+  std::queue<LogEntry> queue_;
+  std::mutex queue_mutex_;
+  std::condition_variable queue_cv_;
+  std::thread writer_thread_;
+  bool stop_ = false;
+
+  void writerLoop(); // background thread function
+  static std::string timestamp();
+  static std::string sanitize(const std::string &s);
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -219,6 +318,22 @@ public:
    * Must be called once before using the simplified placeOrder.
    */
   void loadMasters(const std::string &mastersDir, bool forceDownload = false);
+
+  // ── Trade Logger ──────────────────────────────────────────────────
+  /**
+   * Initialise the trade logger for CSV records and log files.
+   * Call before placing orders to enable trade logging.
+   * @param logsDir       Directory for log/CSV files (auto-created)
+   * @param strategyName  Optional strategy name for file naming
+   */
+  void initLogger(const std::string &logsDir,
+                  const std::string &strategyName = "");
+
+  /** Get the TradeLogger (read-only). */
+  const TradeLogger &getLogger() const { return logger_; }
+
+  /** Get the TradeLogger (mutable, for flush()). */
+  TradeLogger &getLogger() { return logger_; }
 
   // ── Order Placement (Full) ────────────────────────────────────────
   /**
@@ -291,8 +406,13 @@ public:
 private:
   std::map<std::string, BrokerInfo> registry_; // userId → BrokerInfo
   InstrumentNormalizer normalizer_;            // instrument master data
+  TradeLogger logger_;                         // trade CSV + file logger
   int max_workers_ = 20;                       // max parallel threads
   std::mutex order_mutex_;                     // protects result collection
+
+  // Response normalization helpers
+  static std::string normalizeStatus(const std::string &rawStatus);
+  void fillResultFromRaw(OrderResult &res);
 
   // ── Broker-specific dispatchers ──────────────────────────────────
   OrderResult placeOrderAliceBlue(AliceBlueBroker *b, const std::string &userId,

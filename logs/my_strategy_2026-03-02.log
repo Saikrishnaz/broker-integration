@@ -1,0 +1,30 @@
+2026-03-02 15:52:33.815 - INFO - TradeLogger initialized: records=./logs/my_strategy_trades.csv log=./logs/my_strategy_2026-03-02.log
+2026-03-02 15:52:58.038 - INFO - [placeOrder] user=1805656 broker=aliceblue exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=130 (lots=2 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.038 - INFO - [placeOrder] user=J252505 broker=angelone exch=NFO token=35229 symbol=NIFTY30JUN2630000CE side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.039 - INFO - [placeOrder] user=ILR269 broker=kiteconnect exch=NFO token=35229 symbol=NIFTY26JUN30000CE side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.040 - INFO - [placeOrder] user=YJ06745 broker=fyersbroker exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.040 - ERROR - [TRADE] FAILED | fyersbroker:YJ06745 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 0ms | Unknown broker: fyersbroker
+2026-03-02 15:52:58.040 - INFO - [placeOrder] user=EMUM503065 broker=motilaloswalbroker exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.040 - ERROR - [TRADE] FAILED | motilaloswalbroker:EMUM503065 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 0ms | Unknown broker: motilaloswalbroker
+2026-03-02 15:52:58.040 - INFO - [placeOrder] user=4MAUQ9 broker=upstoxbroker exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.040 - ERROR - [TRADE] FAILED | upstoxbroker:4MAUQ9 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 0ms | Unknown broker: upstoxbroker
+2026-03-02 15:52:58.040 - INFO - [placeOrder] user=1109097409 broker=dhanbroker exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:52:58.040 - ERROR - [TRADE] FAILED | dhanbroker:1109097409 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 0ms | Unknown broker: dhanbroker
+2026-03-02 15:52:58.104 - INFO - [TRADE] SUCCESS | angelone:J252505 | NFO:0 NIFTY30JUN2630000CE | BUY 65 | oid=0302be109c76AO | 65ms | SUCCESS
+2026-03-02 15:52:58.138 - ERROR - [TRADE] FAILED | aliceblue:1805656 | NFO:0 NIFTY30JUN26C30000 | BUY 130 | oid= | 100ms | {"message":"Success","result":[{"brokerOrderId":"26030200265495","requestTime":"21:22:58 02-03-2026"}],"status":"Ok"}
+2026-03-02 15:52:58.164 - ERROR - [TRADE] FAILED | kiteconnect:ILR269 | NFO:0 NIFTY26JUN30000CE | BUY 65 | oid= | 124ms | Exception: [InputException] Market orders in NIFTY26JUN30000CE are blocked from trading due to illiquidity. Try placing MARKET order with [market protection](https://support.zerodha.com/category/trading-and-markets/charts-and-orders/order/articles/market-price-protection-on-the-order-window) enabled.
+2026-03-02 15:55:18.618 - INFO - TradeLogger initialized: records=./logs/my_strategy_trades.csv log=./logs/my_strategy_2026-03-02.log
+2026-03-02 15:55:19.523 - INFO - [placeOrder] user=J252505 broker=angelone exch=NFO token=35229 symbol=NIFTY30JUN2630000CE side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.523 - INFO - [placeOrder] user=1805656 broker=aliceblue exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=130 (lots=2 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.523 - INFO - [placeOrder] user=ILR269 broker=kiteconnect exch=NFO token=35229 symbol=NIFTY26JUN30000CE side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.524 - INFO - [placeOrder] user=YJ06745 broker=fyers exch=NFO token=35229 symbol=NSE:NIFTY26JUN30000CE side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.525 - INFO - [placeOrder] user=4MAUQ9 broker=upstox exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.525 - INFO - [placeOrder] user=EMUM503065 broker=motilal exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.525 - INFO - [placeOrder] user=1109097409 broker=dhan exch=NFO token=35229 symbol=NIFTY30JUN26C30000 side=BUY qty=65 (lots=1 x lot=65) product=MIS orderType=MARKET
+2026-03-02 15:55:19.525 - ERROR - [TRADE] FAILED | motilal:EMUM503065 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 0ms | Exception: HTTP POST failed: URL using bad/illegal format or missing URL
+2026-03-02 15:55:19.575 - INFO - [TRADE] SUCCESS | angelone:J252505 | NFO:0 NIFTY30JUN2630000CE | BUY 65 | oid=0302bdd861c9AO | 51ms | SUCCESS
+2026-03-02 15:55:19.585 - ERROR - [TRADE] FAILED | aliceblue:1805656 | NFO:0 NIFTY30JUN26C30000 | BUY 130 | oid= | 61ms | {"message":"Success","result":[{"brokerOrderId":"26030200265565","requestTime":"21:25:19 02-03-2026"}],"status":"Ok"}
+2026-03-02 15:55:19.599 - ERROR - [TRADE] FAILED | kiteconnect:ILR269 | NFO:0 NIFTY26JUN30000CE | BUY 65 | oid= | 76ms | Exception: [InputException] Market orders in NIFTY26JUN30000CE are blocked from trading due to illiquidity. Try placing MARKET order with [market protection](https://support.zerodha.com/category/trading-and-markets/charts-and-orders/order/articles/market-price-protection-on-the-order-window) enabled.
+2026-03-02 15:55:19.601 - ERROR - [TRADE] FAILED | dhan:1109097409 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 76ms | {"data":"","remarks":{"error_code":"DH-906","error_message":"Market is Closed! Want to place an offline order?","error_type":"Order_Error"},"status":"failure"}
+2026-03-02 15:55:19.618 - ERROR - [TRADE] FAILED | fyers:YJ06745 | NFO:0 NSE:NIFTY26JUN30000CE | BUY 65 | oid= | 93ms | {"code":-50,"message":"The input symbol is invalid.","s":"error"}
+2026-03-02 15:55:19.779 - ERROR - [TRADE] FAILED | upstox:4MAUQ9 | NFO:0 NIFTY30JUN26C30000 | BUY 65 | oid= | 254ms | Exception: Invalid Instrument key
